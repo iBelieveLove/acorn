@@ -7,10 +7,17 @@ import {types as tt} from "./tokentype.js"
 import {lineBreak} from "./whitespace.js"
 
 export class TokContext {
+  /**
+   * @param {string} token 
+   * @param {boolean} isExpr 是否表达式
+   * @param {boolean} preserveSpace 
+   * @param {(p: Parser) => void} override 只有在`表达式的情况下会设置, 通常是tryReadTemplateToken
+   * @param {boolean} generator 
+   */
   constructor(token, isExpr, preserveSpace, override, generator) {
     this.token = token
     this.isExpr = !!isExpr
-    this.preserveSpace = !!preserveSpace
+    this.preserveSpace = !!preserveSpace // 标识是否可能有空格或注释在后面
     this.override = override
     this.generator = !!generator
   }
@@ -31,10 +38,18 @@ export const types = {
 
 const pp = Parser.prototype
 
+/**
+ * 初始化上下文列表
+ * @returns {TokContext[]}
+ */
 pp.initialContext = function() {
   return [types.b_stat]
 }
 
+/**
+ * 获取列表中上一个上下文
+ * @returns {TokContext | undefined}
+*/
 pp.curContext = function() {
   return this.context[this.context.length - 1]
 }

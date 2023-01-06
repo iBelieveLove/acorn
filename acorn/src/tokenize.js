@@ -1,7 +1,9 @@
 import {isIdentifierStart, isIdentifierChar} from "./identifier.js"
-import {types as tt, keywords as keywordTypes} from "./tokentype.js"
+// eslint-disable-next-line no-unused-vars
+import {types as tt, keywords as keywordTypes, TokenType} from "./tokentype.js"
 import {Parser} from "./state.js"
-import {SourceLocation} from "./locutil.js"
+// eslint-disable-next-line no-unused-vars
+import {Position, SourceLocation} from "./locutil.js"
 import {RegExpValidationState} from "./regexp.js"
 import {lineBreak, nextLineBreak, isNewLine, nonASCIIwhitespace} from "./whitespace.js"
 import {codePointToString} from "./util.js"
@@ -11,14 +13,21 @@ import {codePointToString} from "./util.js"
 // used for the onToken callback and the external tokenizer.
 
 export class Token {
+  /**
+   * @param {{type: TokenType, value: string, start: number; end: number, options: any;
+   *  startLoc?: Position, endLoc: Position;}} p
+   * p 其实等于Parser
+   */
   constructor(p) {
-    this.type = p.type
-    this.value = p.value
-    this.start = p.start
-    this.end = p.end
+    this.type = p.type // TokenType
+    this.value = p.value // string
+    this.start = p.start // number
+    this.end = p.end // number
     if (p.options.locations)
+      // sourceLocation
       this.loc = new SourceLocation(p, p.startLoc, p.endLoc)
     if (p.options.ranges)
+      // number[]
       this.range = [p.start, p.end]
   }
 }
@@ -28,13 +37,15 @@ export class Token {
 const pp = Parser.prototype
 
 // Move to the next token
-
+/**
+ * @param {boolean} ignoreEscapeSequenceInKeyword
+ * 记录当前token属性, 然后调用nextToken方法
+ */
 pp.next = function(ignoreEscapeSequenceInKeyword) {
   if (!ignoreEscapeSequenceInKeyword && this.type.keyword && this.containsEsc)
     this.raiseRecoverable(this.start, "Escape sequence in keyword " + this.type.keyword)
   if (this.options.onToken)
     this.options.onToken(new Token(this))
-
   this.lastTokEnd = this.end
   this.lastTokStart = this.start
   this.lastTokEndLoc = this.endLoc
@@ -42,6 +53,7 @@ pp.next = function(ignoreEscapeSequenceInKeyword) {
   this.nextToken()
 }
 
+/** tokenizer的时候, 手动调用获取下一个token内容 */
 pp.getToken = function() {
   this.next()
   return new Token(this)
@@ -66,19 +78,27 @@ if (typeof Symbol !== "undefined")
 
 // Read a single token, updating the parser object's token-related
 // properties.
-
+/**
+ * 通常在next中调用, 用于获取下一个token
+ * 先调用curContext获取当前上下文, 尝试跳过空格和注释
+ */
 pp.nextToken = function() {
   let curContext = this.curContext()
   if (!curContext || !curContext.preserveSpace) this.skipSpace()
 
   this.start = this.pos
-  if (this.options.locations) this.startLoc = this.curPosition()
+  if (this.options.locations) this.startLoc = this.curPosition() // Position
   if (this.pos >= this.input.length) return this.finishToken(tt.eof)
-
+  // tryReadTemplateToken, 在`template的时候设置, 用于读取后面的内容.
   if (curContext.override) return curContext.override(this)
   else this.readToken(this.fullCharCodeAtPos())
 }
 
+/**
+ * 读出一个token
+ * @param {number} code 
+ * @returns {Token}
+ */
 pp.readToken = function(code) {
   // Identifier or keyword. '\uXXXX' sequences are allowed in
   // identifiers, so '\' also dispatches to that.
@@ -88,6 +108,10 @@ pp.readToken = function(code) {
   return this.getTokenFromCode(code)
 }
 
+/**
+ * 读出当前位置的charCode, 如果是unicode也同样支持.
+ * @returns {number}
+ */
 pp.fullCharCodeAtPos = function() {
   let code = this.input.charCodeAt(this.pos)
   if (code <= 0xd7ff || code >= 0xdc00) return code
@@ -95,6 +119,9 @@ pp.fullCharCodeAtPos = function() {
   return next <= 0xdbff || next >= 0xe000 ? code : (code << 10) + next - 0x35fdc00
 }
 
+/**
+ * 跳过多行注释, 在skipSpace中调用. 判断到注释的结束符后完成.
+ */
 pp.skipBlockComment = function() {
   let startLoc = this.options.onComment && this.curPosition()
   let start = this.pos, end = this.input.indexOf("*/", this.pos += 2)
@@ -111,6 +138,11 @@ pp.skipBlockComment = function() {
                            startLoc, this.curPosition())
 }
 
+/**
+ * 跳过单行注释, 在skipSpace中调用, 在判断到换行后结束
+ * @param {number} startSkip
+ * 支持 `//`, `-->` 和`<!--` 3种开头
+ */
 pp.skipLineComment = function(startSkip) {
   let start = this.pos
   let startLoc = this.options.onComment && this.curPosition()
@@ -125,7 +157,9 @@ pp.skipLineComment = function(startSkip) {
 
 // Called at the start of the parse and after every token. Skips
 // whitespace and comments, and.
-
+/**
+ * 跳过空格和注释内容
+ */
 pp.skipSpace = function() {
   loop: while (this.pos < this.input.length) {
     let ch = this.input.charCodeAt(this.pos)
@@ -171,6 +205,11 @@ pp.skipSpace = function() {
 // the token, so that the next one's `start` will point at the
 // right position.
 
+/**
+ * @param {TokenType} type
+ * @param {string} val
+ * 结束当前token读取, 每次读取token时会调用一次, 记录当前type和value
+ */
 pp.finishToken = function(type, val) {
   this.end = this.pos
   if (this.options.locations) this.endLoc = this.curPosition()
@@ -189,7 +228,12 @@ pp.finishToken = function(type, val) {
 // into it.
 //
 // All in the name of speed.
-//
+/**
+ * 判断.后面的内容
+ * 如果是数字, 则读取数字
+ * 如果是两个点.., 则是三点解构符
+ * 如果都不是, 则是单独的点.
+ */
 pp.readToken_dot = function() {
   let next = this.input.charCodeAt(this.pos + 1)
   if (next >= 48 && next <= 57) return this.readNumber(true)
@@ -203,6 +247,10 @@ pp.readToken_dot = function() {
   }
 }
 
+/**
+ * 区分3种情况, 1 是正则表达式, 2是 /= 号, 3 是单独除号
+ * @returns {Token}
+ */
 pp.readToken_slash = function() { // '/'
   let next = this.input.charCodeAt(this.pos + 1)
   if (this.exprAllowed) { ++this.pos; return this.readRegexp() }
@@ -210,6 +258,9 @@ pp.readToken_slash = function() { // '/'
   return this.finishOp(tt.slash, 1)
 }
 
+/**
+ * 读%与*, **, **=
+ */
 pp.readToken_mult_modulo_exp = function(code) { // '%*'
   let next = this.input.charCodeAt(this.pos + 1)
   let size = 1
@@ -226,6 +277,9 @@ pp.readToken_mult_modulo_exp = function(code) { // '%*'
   return this.finishOp(tokentype, size)
 }
 
+/**
+ * 读位运算, 逻辑运算, 以及位运算赋值.
+ */
 pp.readToken_pipe_amp = function(code) { // '|&'
   let next = this.input.charCodeAt(this.pos + 1)
   if (next === code) {
@@ -239,12 +293,14 @@ pp.readToken_pipe_amp = function(code) { // '|&'
   return this.finishOp(code === 124 ? tt.bitwiseOR : tt.bitwiseAND, 1)
 }
 
+/** 读异或符号 */
 pp.readToken_caret = function() { // '^'
   let next = this.input.charCodeAt(this.pos + 1)
   if (next === 61) return this.finishOp(tt.assign, 2)
   return this.finishOp(tt.bitwiseXOR, 1)
 }
 
+/** 读加减符号 */
 pp.readToken_plus_min = function(code) { // '+-'
   let next = this.input.charCodeAt(this.pos + 1)
   if (next === code) {
@@ -261,6 +317,7 @@ pp.readToken_plus_min = function(code) { // '+-'
   return this.finishOp(tt.plusMin, 1)
 }
 
+/** 读大于小于号 */
 pp.readToken_lt_gt = function(code) { // '<>'
   let next = this.input.charCodeAt(this.pos + 1)
   let size = 1
@@ -280,6 +337,7 @@ pp.readToken_lt_gt = function(code) { // '<>'
   return this.finishOp(tt.relational, size)
 }
 
+/** 读出= 和!号 */
 pp.readToken_eq_excl = function(code) { // '=!'
   let next = this.input.charCodeAt(this.pos + 1)
   if (next === 61) return this.finishOp(tt.equality, this.input.charCodeAt(this.pos + 2) === 61 ? 3 : 2)
@@ -290,25 +348,30 @@ pp.readToken_eq_excl = function(code) { // '=!'
   return this.finishOp(code === 61 ? tt.eq : tt.prefix, 1)
 }
 
+/** 读出问号 */
 pp.readToken_question = function() { // '?'
   const ecmaVersion = this.options.ecmaVersion
   if (ecmaVersion >= 11) {
     let next = this.input.charCodeAt(this.pos + 1)
-    if (next === 46) {
+    if (next === 46) { // .
       let next2 = this.input.charCodeAt(this.pos + 2)
       if (next2 < 48 || next2 > 57) return this.finishOp(tt.questionDot, 2)
     }
-    if (next === 63) {
+    if (next === 63) { // ?
       if (ecmaVersion >= 12) {
         let next2 = this.input.charCodeAt(this.pos + 2)
-        if (next2 === 61) return this.finishOp(tt.assign, 3)
+        if (next2 === 61) return this.finishOp(tt.assign, 3) // ??=
       }
-      return this.finishOp(tt.coalesce, 2)
+      return this.finishOp(tt.coalesce, 2) // ?? 
     }
   }
-  return this.finishOp(tt.question, 1)
+  return this.finishOp(tt.question, 1) // 三元表达式
 }
 
+/**
+ * #开头, 在ecma版本较新的情况下表示私有变量名.
+ * @returns 
+ */
 pp.readToken_numberSign = function() { // '#'
   const ecmaVersion = this.options.ecmaVersion
   let code = 35 // '#'
@@ -323,6 +386,11 @@ pp.readToken_numberSign = function() { // '#'
   this.raise(this.pos, "Unexpected character '" + codePointToString(code) + "'")
 }
 
+/**
+ * 根据传入的code值, 区分获取不一样的token, 进入这个方法说明不是字母, 下划线
+ * @param {number} code 
+ * @returns {Token}
+ */
 pp.getTokenFromCode = function(code) {
   switch (code) {
   // The interpretation of a dot depends on whether it is followed
@@ -331,15 +399,15 @@ pp.getTokenFromCode = function(code) {
     return this.readToken_dot()
 
   // Punctuation tokens.
-  case 40: ++this.pos; return this.finishToken(tt.parenL)
-  case 41: ++this.pos; return this.finishToken(tt.parenR)
-  case 59: ++this.pos; return this.finishToken(tt.semi)
-  case 44: ++this.pos; return this.finishToken(tt.comma)
-  case 91: ++this.pos; return this.finishToken(tt.bracketL)
-  case 93: ++this.pos; return this.finishToken(tt.bracketR)
-  case 123: ++this.pos; return this.finishToken(tt.braceL)
-  case 125: ++this.pos; return this.finishToken(tt.braceR)
-  case 58: ++this.pos; return this.finishToken(tt.colon)
+  case 40: ++this.pos; return this.finishToken(tt.parenL) // (
+  case 41: ++this.pos; return this.finishToken(tt.parenR) // )
+  case 59: ++this.pos; return this.finishToken(tt.semi) // ;
+  case 44: ++this.pos; return this.finishToken(tt.comma) // ,
+  case 91: ++this.pos; return this.finishToken(tt.bracketL) // [
+  case 93: ++this.pos; return this.finishToken(tt.bracketR) // ]
+  case 123: ++this.pos; return this.finishToken(tt.braceL) // {
+  case 125: ++this.pos; return this.finishToken(tt.braceR) // }
+  case 58: ++this.pos; return this.finishToken(tt.colon) // :
 
   case 96: // '`'
     if (this.options.ecmaVersion < 6) break
@@ -407,6 +475,10 @@ pp.finishOp = function(type, size) {
   return this.finishToken(type, str)
 }
 
+/**
+ * 读出/开头的正则表达式
+ * @returns {Token}
+ */
 pp.readRegexp = function() {
   let escaped, inClass, start = this.pos
   for (;;) {
@@ -494,6 +566,7 @@ function stringToNumber(str, isLegacyOctalNumericLiteral) {
   return parseFloat(str.replace(/_/g, ""))
 }
 
+/** string转bigint */
 function stringToBigInt(str) {
   if (typeof BigInt !== "function") {
     return null
@@ -503,6 +576,9 @@ function stringToBigInt(str) {
   return BigInt(str.replace(/_/g, ""))
 }
 
+/**
+ * 读出多进制的数字, 主要是2, 8, 16
+ */
 pp.readRadixNumber = function(radix) {
   let start = this.pos
   this.pos += 2 // 0x
@@ -516,7 +592,10 @@ pp.readRadixNumber = function(radix) {
 }
 
 // Read an integer, octal integer, or floating-point number.
-
+/**
+ * 读出10进制数字
+ * @param {boolean} startsWithDot
+ */
 pp.readNumber = function(startsWithDot) {
   let start = this.pos
   if (!startsWithDot && this.readInt(10, undefined, true) === null) this.raise(start, "Invalid number")
@@ -547,22 +626,29 @@ pp.readNumber = function(startsWithDot) {
 }
 
 // Read a string value, interpreting backslash-escapes.
-
+/** 读出16进制的数字
+ * @returns {number}
+ */
 pp.readCodePoint = function() {
   let ch = this.input.charCodeAt(this.pos), code
 
-  if (ch === 123) { // '{'
+  if (ch === 123) { // '{' // \u{abc}
     if (this.options.ecmaVersion < 6) this.unexpected()
     let codePos = ++this.pos
     code = this.readHexChar(this.input.indexOf("}", this.pos) - this.pos)
     ++this.pos
     if (code > 0x10FFFF) this.invalidStringToken(codePos, "Code point out of bounds")
-  } else {
+  } else { // \uffff
     code = this.readHexChar(4)
   }
   return code
 }
 
+/**
+ * 读到单双引号时进入, 读出一个string
+ * @param {number} quote
+ * @returns {Token}
+*/
 pp.readString = function(quote) {
   let out = "", chunkStart = ++this.pos
   for (;;) {
@@ -751,7 +837,7 @@ pp.readEscapedChar = function(inTemplate) {
 }
 
 // Used to read character escape sequences ('\x', '\u', '\U').
-
+/** 读出len个16进制字符, 一般是1-4个 */
 pp.readHexChar = function(len) {
   let codePos = this.pos
   let n = this.readInt(16, len)
@@ -764,14 +850,17 @@ pp.readHexChar = function(len) {
 //
 // Incrementally adds only escaped chars, adding other chunks as-is
 // as a micro-optimization.
-
+/**
+ * 往后读出一个变量名.
+ * @returns {string}
+ */
 pp.readWord1 = function() {
   this.containsEsc = false
   let word = "", first = true, chunkStart = this.pos
   let astral = this.options.ecmaVersion >= 6
   while (this.pos < this.input.length) {
     let ch = this.fullCharCodeAtPos()
-    if (isIdentifierChar(ch, astral)) {
+    if (isIdentifierChar(ch, astral)) { // 正常变量
       this.pos += ch <= 0xffff ? 1 : 2
     } else if (ch === 92) { // "\"
       this.containsEsc = true
@@ -795,7 +884,9 @@ pp.readWord1 = function() {
 
 // Read an identifier or keyword token. Will check for reserved
 // words when necessary.
-
+/**
+ * 读出一个合法的变量名, 如果是keyword, 则作为keyword返回, 否则作为变量返回.
+ */
 pp.readWord = function() {
   let word = this.readWord1()
   let type = tt.name

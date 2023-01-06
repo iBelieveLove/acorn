@@ -3,7 +3,8 @@ import {Parser} from "./state.js"
 import {lineBreak, skipWhiteSpace} from "./whitespace.js"
 import {isIdentifierStart, isIdentifierChar, keywordRelationalOperator} from "./identifier.js"
 import {hasOwn, loneSurrogate} from "./util.js"
-import {DestructuringErrors} from "./parseutil.js"
+import { DestructuringErrors } from "./parseutil.js"
+import { Node } from "./node";
 import {functionFlags, SCOPE_SIMPLE_CATCH, BIND_SIMPLE_CATCH, BIND_LEXICAL, BIND_VAR, BIND_FUNCTION, SCOPE_CLASS_STATIC_BLOCK, SCOPE_SUPER} from "./scopeflags.js"
 
 const pp = Parser.prototype
@@ -14,7 +15,11 @@ const pp = Parser.prototype
 // statements, and wraps them in a Program node.  Optionally takes a
 // `program` argument.  If present, the statements will be appended
 // to its body instead of creating a new node.
-
+/**
+ * parse的入口函数, 解析出program的node.
+ * @param {Node} node 
+ * @returns {Node}
+ */
 pp.parseTopLevel = function(node) {
   let exports = Object.create(null)
   if (!node.body) node.body = []
@@ -31,6 +36,7 @@ pp.parseTopLevel = function(node) {
   return this.finishNode(node, "Program")
 }
 
+/** 定义类型 */
 const loopLabel = {kind: "loop"}, switchLabel = {kind: "switch"}
 
 pp.isLet = function(context) {
@@ -79,6 +85,15 @@ pp.isAsyncFunction = function() {
 // `if (foo) /blah/.exec(foo)`, where looking at the previous token
 // does not help.
 
+/**
+ * 解析单个statement
+ * 比如`class node {}`, `let n = new node();`, `const num = 1`都是一个单独的statement
+ * 所以区分的方式是分号, 换行, 或者大括号
+ * @param {null | string} context 
+ * @param {boolean} topLevel 
+ * @param {Record<string, unknown>} exports 
+ * @returns 
+ */
 pp.parseStatement = function(context, topLevel, exports) {
   let starttype = this.type, node = this.startNode(), kind
 
@@ -439,7 +454,12 @@ pp.parseBlock = function(createNewLexicalScope = true, node = this.startNode(), 
 // Parse a regular `for` loop. The disambiguation code in
 // `parseStatement` will already have parsed the init statement or
 // expression.
-
+/**
+ * 
+ * @param {Node} node 
+ * @param {*} init 
+ * @returns 
+ */
 pp.parseFor = function(node, init) {
   node.init = init
   this.expect(tt.semi)

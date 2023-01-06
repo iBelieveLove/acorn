@@ -3,7 +3,12 @@ import {nextLineBreak} from "./whitespace.js"
 // These are used when `options.locations` is on, for the
 // `startLoc` and `endLoc` properties.
 
+/** 标识第几行第几列 */
 export class Position {
+  /**
+   * @param {number} line 
+   * @param {number} col 
+   */
   constructor(line, col) {
     this.line = line
     this.column = col
@@ -14,7 +19,13 @@ export class Position {
   }
 }
 
+
 export class SourceLocation {
+  /**
+   * @param {Parser} p 
+   * @param {Position} start 
+   * @param {Position} end 
+   */
   constructor(p, start, end) {
     this.start = start
     this.end = end

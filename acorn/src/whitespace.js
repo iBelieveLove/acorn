@@ -17,6 +17,7 @@ export function nextLineBreak(code, from, end = code.length) {
   return -1
 }
 
+/** 判断是否空格的正则表达式 */
 export const nonASCIIwhitespace = /[\u1680\u2000-\u200a\u202f\u205f\u3000\ufeff]/
 
 export const skipWhiteSpace = /(?:\s|\/\/.*|\/\*[^]*?\*\/)*/g

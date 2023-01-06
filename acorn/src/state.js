@@ -6,18 +6,28 @@ import {wordsRegexp} from "./util.js"
 import {SCOPE_TOP, SCOPE_FUNCTION, SCOPE_ASYNC, SCOPE_GENERATOR, SCOPE_SUPER, SCOPE_DIRECT_SUPER, SCOPE_CLASS_STATIC_BLOCK} from "./scopeflags.js"
 
 export class Parser {
+  /**
+   * @param {string} input
+   * @param {any} options
+   */
   constructor(options, input, startPos) {
     this.options = options = getOptions(options)
     this.sourceFile = options.sourceFile
+    // /^(?:break|case|catch|continue|debugger|default|do|else|finally|for|function|if|return|switch|
+    // throw|try|var|while|with| null | true | false |instanceof| typeof| void| delete| new|in| this |const|
+    // class|extends|export|import| super) $ /
     this.keywords = wordsRegexp(keywords[options.ecmaVersion >= 6 ? 6 : options.sourceType === "module" ? "5module" : 5])
     let reserved = ""
     if (options.allowReserved !== true) {
       reserved = reservedWords[options.ecmaVersion >= 6 ? 6 : options.ecmaVersion === 5 ? 5 : 3]
       if (options.sourceType === "module") reserved += " await"
     }
+    // /^(?:enum|await)$/
     this.reservedWords = wordsRegexp(reserved)
     let reservedStrict = (reserved ? reserved + " " : "") + reservedWords.strict
+    // /^(?:enum|await|implements|interface|let|package|private|protected|public|static|yield)$/
     this.reservedWordsStrict = wordsRegexp(reservedStrict)
+    // /^(?:enum|await|implements|interface|let|package|private|protected|public|static|yield|eval|arguments)$/
     this.reservedWordsStrictBind = wordsRegexp(reservedStrict + " " + reservedWords.strictBind)
     this.input = String(input)
 
@@ -34,28 +44,34 @@ export class Parser {
       this.lineStart = this.input.lastIndexOf("\n", startPos - 1) + 1
       this.curLine = this.input.slice(0, this.lineStart).split(lineBreak).length
     } else {
+      // default
       this.pos = this.lineStart = 0
       this.curLine = 1
     }
 
     // Properties of the current token:
     // Its type
+    // 当前token的type
     this.type = tt.eof
     // For tokens that include more information than their type, the value
     this.value = null
     // Its start and end offset
+    /** @type {number} */
     this.start = this.end = this.pos
     // And, if locations are used, the {line, column} object
     // corresponding to those offsets
+    /** @type {Position} */
     this.startLoc = this.endLoc = this.curPosition()
 
     // Position information for the previous token
     this.lastTokEndLoc = this.lastTokStartLoc = null
+    // number
     this.lastTokStart = this.lastTokEnd = this.pos
 
     // The context stack is used to superficially track syntactic
     // context to predict whether a regular expression is allowed in a
     // given position.
+    // TokContext
     this.context = this.initialContext()
     this.exprAllowed = true
 
@@ -79,6 +95,7 @@ export class Parser {
       this.skipLineComment(2)
 
     // Scope tracking for duplicate variable names (see scope.js)
+    // 作用域计算
     this.scopeStack = []
     this.enterScope(SCOPE_TOP)
 
@@ -146,6 +163,7 @@ export class Parser {
     return parser.parseExpression()
   }
 
+  /** 生成token */
   static tokenizer(input, options) {
     return new this(options, input)
   }

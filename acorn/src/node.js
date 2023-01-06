@@ -1,16 +1,27 @@
 import {Parser} from "./state.js"
-import {SourceLocation} from "./locutil.js"
+import {Position, SourceLocation} from "./locutil.js"
 
 export class Node {
+  /**
+   * 
+   * @param {Parser} parser 
+   * @param {number} pos 
+   * @param {Position} loc 
+   */
   constructor(parser, pos, loc) {
     this.type = ""
+    /** @type {number} */
     this.start = pos
+    /** @type {number} */
     this.end = 0
     if (parser.options.locations)
+      /** @type {SourceLocation} */
       this.loc = new SourceLocation(parser, loc)
     if (parser.options.directSourceFile)
+      /** @type {string} */
       this.sourceFile = parser.options.directSourceFile
     if (parser.options.ranges)
+      /** @type {number[]} */
       this.range = [pos, 0]
   }
 }
@@ -19,10 +30,21 @@ export class Node {
 
 const pp = Parser.prototype
 
+/**
+ * 
+ * @returns {Node}
+ * @type {() => Node}
+ */
 pp.startNode = function() {
   return new Node(this, this.start, this.startLoc)
 }
 
+/**
+ * 
+ * @param {number} pos 
+ * @param {Position} loc 
+ * @returns {Node}
+ */
 pp.startNodeAt = function(pos, loc) {
   return new Node(this, pos, loc)
 }
@@ -39,7 +61,7 @@ function finishNodeAt(node, type, pos, loc) {
   return node
 }
 
-pp.finishNode = function(node, type) {
+pp.finishNode = function (node, type) {
   return finishNodeAt.call(this, node, type, this.lastTokEnd, this.lastTokEndLoc)
 }
 

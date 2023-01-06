@@ -47,6 +47,9 @@ export const defaultOptions = {
   // When enabled, hashbang directive in the beginning of file is
   // allowed and treated as a line comment. Enabled by default when
   // `ecmaVersion` >= 2023.
+  // 在计算领域中，Shebang是一个由井号和叹号构成的字符序列#!，其出现在文本文件的第一行的前两个字符。
+  // 在文件中存在Shebang的情况下，类Unix操作系统的程序加载器会分析Shebang后的内容，将这些内容作为解释器指令，
+  // 并调用该指令，并将载有Shebang的文件路径作为该解释器的参数。
   allowHashBang: false,
   // When `locations` is on, `loc` properties holding objects with
   // `start` and `end` properties in `{line, column}` form (with

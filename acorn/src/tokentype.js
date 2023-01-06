@@ -21,17 +21,28 @@
 // to know when parsing a label, in order to allow or disallow
 // continue jumps to that label.
 
+/**
+ * tokenType的类型定义
+ */
 export class TokenType {
+  /**
+   * @param {string} label 
+   * @param {{keyword: string; }} conf
+   */
   constructor(label, conf = {}) {
-    this.label = label
-    this.keyword = conf.keyword
+    /** @type {string} */
+    this.label = label // string
+    /** @type {string} */
+    this.keyword = conf.keyword // string, 如'if', 'this'
     this.beforeExpr = !!conf.beforeExpr
     this.startsExpr = !!conf.startsExpr
     this.isLoop = !!conf.isLoop
     this.isAssign = !!conf.isAssign
     this.prefix = !!conf.prefix
     this.postfix = !!conf.postfix
-    this.binop = conf.binop || null
+    /** @type {boolean | null} */
+    this.binop = conf.binop || null // boolean | null
+    /** @type {() => void | null} */
     this.updateContext = null
   }
 }
@@ -51,13 +62,16 @@ function kw(name, options = {}) {
   return keywords[name] = new TokenType(name, options)
 }
 
+/**
+ * @description 预定义对应关键词的token类型, 包括基础数据类型.
+ */
 export const types = {
   num: new TokenType("num", startsExpr),
   regexp: new TokenType("regexp", startsExpr),
   string: new TokenType("string", startsExpr),
   name: new TokenType("name", startsExpr),
   privateId: new TokenType("privateId", startsExpr),
-  eof: new TokenType("eof"),
+  eof: new TokenType("eof"), // 标识结束符
 
   // Punctuation token types.
   bracketL: new TokenType("[", {beforeExpr: true, startsExpr: true}),
@@ -69,14 +83,14 @@ export const types = {
   comma: new TokenType(",", beforeExpr),
   semi: new TokenType(";", beforeExpr),
   colon: new TokenType(":", beforeExpr),
-  dot: new TokenType("."),
+  dot: new TokenType("."), // 点
   question: new TokenType("?", beforeExpr),
   questionDot: new TokenType("?."),
   arrow: new TokenType("=>", beforeExpr),
   template: new TokenType("template"),
   invalidTemplate: new TokenType("invalidTemplate"),
-  ellipsis: new TokenType("...", beforeExpr),
-  backQuote: new TokenType("`", startsExpr),
+  ellipsis: new TokenType("...", beforeExpr), // 三点解构符
+  backQuote: new TokenType("`", startsExpr), //
   dollarBraceL: new TokenType("${", {beforeExpr: true, startsExpr: true}),
 
   // Operators. These carry several kinds of properties to help the
