@@ -5,7 +5,7 @@ const pp = Parser.prototype
 
 class Scope {
   constructor(flags) {
-    this.flags = flags
+    this.flags = flags // 用于判断当前作用域类型
     // A list of var-declared names in the current lexical scope
     this.var = []
     // A list of lexically-declared names in the current lexical scope
@@ -18,7 +18,9 @@ class Scope {
 }
 
 // The functions in this module keep track of declared variables in the current scope in order to detect duplicate variable names.
-
+/** 
+ * 进入新作用域
+ * @param {number} flags */
 pp.enterScope = function(flags) {
   this.scopeStack.push(new Scope(flags))
 }

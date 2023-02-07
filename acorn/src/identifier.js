@@ -52,7 +52,7 @@ function isInAstralSet(code, set) {
 }
 
 // Test whether a given character code starts an identifier.
-
+/** 判断开头 */
 export function isIdentifierStart(code, astral) {
   if (code < 65) return code === 36
   if (code < 91) return true

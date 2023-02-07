@@ -16,12 +16,13 @@
 //
 // [opp]: http://en.wikipedia.org/wiki/Operator-precedence_parser
 
-import {types as tt} from "./tokentype.js"
+import {NodeTypes, NodeTypes as nt, TokenType, types as tt} from "./tokentype.js"
 import {types as tokenCtxTypes} from "./tokencontext.js"
 import {Parser} from "./state.js"
 import {DestructuringErrors} from "./parseutil.js"
 import {lineBreak} from "./whitespace.js"
 import {functionFlags, SCOPE_ARROW, SCOPE_SUPER, SCOPE_DIRECT_SUPER, BIND_OUTSIDE, BIND_VAR} from "./scopeflags.js"
+import { SourceLocation } from "./locutil.js"
 
 const pp = Parser.prototype
 
@@ -29,7 +30,13 @@ const pp = Parser.prototype
 // Object/class getters and setters are not allowed to clash —
 // either with each other or with an init property — and in
 // strict mode, init properties are also not allowed to be repeated.
-
+/**
+ * 只有parseObj中调用, 检查prop在propHash中是否已存在, 就是检查obj中不能有重复定义.
+ * @param {Node} prop 
+ * @param {Record<string, any>} propHash 
+ * @param {*} refDestructuringErrors 
+ * @returns 
+ */
 pp.checkPropClash = function(prop, propHash, refDestructuringErrors) {
   if (this.options.ecmaVersion >= 9 && prop.type === "SpreadElement")
     return
@@ -92,11 +99,18 @@ pp.checkPropClash = function(prop, propHash, refDestructuringErrors) {
 // property assignment in contexts where both object expression
 // and object pattern might appear (so it's possible to raise
 // delayed syntax error at correct position).
-
+/**
+ * 解析单条表达式, 主要是赋值表达式.
+ * @param {string | boolean} forInit let/const/var
+ * @param {*} refDestructuringErrors 
+ * @returns 
+ */
 pp.parseExpression = function(forInit, refDestructuringErrors) {
   let startPos = this.start, startLoc = this.startLoc
+  // let a = b;
   let expr = this.parseMaybeAssign(forInit, refDestructuringErrors)
   if (this.type === tt.comma) {
+    // let a,b,c = xxx;
     let node = this.startNodeAt(startPos, startLoc)
     node.expressions = [expr]
     while (this.eat(tt.comma)) node.expressions.push(this.parseMaybeAssign(forInit, refDestructuringErrors))
@@ -107,7 +121,15 @@ pp.parseExpression = function(forInit, refDestructuringErrors) {
 
 // Parse an assignment expression. This includes applications of
 // operators like `+=`.
-
+/**
+ * 解析 a = b; a += b; xxx -= xxxx;
+ * 同时兼容三元表达式a?b:c
+ * 解析时, 表达式支持逻辑运算符等
+ * @param {string | boolean} forInit 
+ * @param {*} refDestructuringErrors 
+ * @param {Function} afterLeftParse 
+ * @returns 
+ */
 pp.parseMaybeAssign = function(forInit, refDestructuringErrors, afterLeftParse) {
   if (this.isContextual("yield")) {
     if (this.inGenerator) return this.parseYield(forInit)
@@ -152,7 +174,7 @@ pp.parseMaybeAssign = function(forInit, refDestructuringErrors, afterLeftParse) 
     this.next()
     node.right = this.parseMaybeAssign(forInit)
     if (oldDoubleProto > -1) refDestructuringErrors.doubleProto = oldDoubleProto
-    return this.finishNode(node, "AssignmentExpression")
+    return this.finishNode(node, NodeTypes.AssignmentExpression)
   } else {
     if (ownDestructuringErrors) this.checkExpressionErrors(refDestructuringErrors, true)
   }
@@ -162,24 +184,33 @@ pp.parseMaybeAssign = function(forInit, refDestructuringErrors, afterLeftParse) 
 }
 
 // Parse a ternary conditional (`?:`) operator.
-
+/**
+ * 只有在parseMaybeAssign中调用
+ * 解析 ? : 三元表达式
+ * @param {string} forInit 
+ * @param {*} refDestructuringErrors 
+ * @returns 
+ */
 pp.parseMaybeConditional = function(forInit, refDestructuringErrors) {
   let startPos = this.start, startLoc = this.startLoc
   let expr = this.parseExprOps(forInit, refDestructuringErrors)
   if (this.checkExpressionErrors(refDestructuringErrors)) return expr
   if (this.eat(tt.question)) {
     let node = this.startNodeAt(startPos, startLoc)
-    node.test = expr
-    node.consequent = this.parseMaybeAssign()
-    this.expect(tt.colon)
-    node.alternate = this.parseMaybeAssign(forInit)
-    return this.finishNode(node, "ConditionalExpression")
+    node.test = expr // ? 前面的内容
+    node.consequent = this.parseMaybeAssign() // 第一个表达式
+    this.expect(tt.colon) // :
+    node.alternate = this.parseMaybeAssign(forInit) // 第二个表达式
+    return this.finishNode(node, NodeTypes.ConditionalExpression)
   }
   return expr
 }
 
 // Start the precedence parser.
-
+/**
+ * 只有parseMaybeConditional调用, 解析表达式
+ * @param {string} forInit
+ */
 pp.parseExprOps = function(forInit, refDestructuringErrors) {
   let startPos = this.start, startLoc = this.startLoc
   let expr = this.parseMaybeUnary(refDestructuringErrors, false, false, forInit)
@@ -193,7 +224,17 @@ pp.parseExprOps = function(forInit, refDestructuringErrors) {
 // defer further parser to one of its callers when it encounters an
 // operator that has a lower precedence than the set it is parsing.
 
-pp.parseExprOp = function(left, leftStartPos, leftStartLoc, minPrec, forInit) {
+/**
+ * 解析计算表达式, 解析类似 a || b, a >> b, c * d 这样的表达式
+ * @param {Node} left 
+ * @param {Position} leftStartPos 
+ * @param {SourceLocation} leftStartLoc 
+ * @param {number} minPrec 
+ * @param {string} forInit 
+ * @returns 
+ */
+pp.parseExprOp = function (left, leftStartPos, leftStartLoc, minPrec, forInit) {
+  // binop 在进行位运算, 逻辑运算等计算时存在
   let prec = this.type.binop
   if (prec != null && (!forInit || this.type !== tt._in)) {
     if (prec > minPrec) {
@@ -218,6 +259,16 @@ pp.parseExprOp = function(left, leftStartPos, leftStartLoc, minPrec, forInit) {
   return left
 }
 
+/**
+ * 根据左右node的类型构建node
+ * @param {*} startPos 
+ * @param {*} startLoc 
+ * @param {Node} left 
+ * @param {Node} right 
+ * @param {string} op 
+ * @param {boolean} logical 标识是否逻辑运算符&& 或者||或者??
+ * @returns 
+ */
 pp.buildBinary = function(startPos, startLoc, left, right, op, logical) {
   if (right.type === "PrivateIdentifier") this.raise(right.start, "Private identifier can only be left side of binary expression")
   let node = this.startNodeAt(startPos, startLoc)
@@ -228,43 +279,60 @@ pp.buildBinary = function(startPos, startLoc, left, right, op, logical) {
 }
 
 // Parse unary operators, both prefix and postfix.
-
+/**
+ * 读出单个变量或者表达式, 如a, b.c, ccc[0], ddd(), ++a, a++, delete a[1], typeof a
+ * @param {*} refDestructuringErrors 
+ * @param {boolean} sawUnary 
+ * @param {boolean} incDec 
+ * @param {*} forInit 
+ * @returns 
+ */
 pp.parseMaybeUnary = function(refDestructuringErrors, sawUnary, incDec, forInit) {
   let startPos = this.start, startLoc = this.startLoc, expr
   if (this.isContextual("await") && this.canAwait) {
+    // 如果允许await 则调用parseAwait
     expr = this.parseAwait(forInit)
     sawUnary = true
   } else if (this.type.prefix) {
+    // 如果是++/--或者typeof, delete等
     let node = this.startNode(), update = this.type === tt.incDec
     node.operator = this.value
     node.prefix = true
     this.next()
+    // 读出需要操作的变量
     node.argument = this.parseMaybeUnary(null, true, update, forInit)
     this.checkExpressionErrors(refDestructuringErrors, true)
+    // 如果是++/--, 检查合法性
     if (update) this.checkLValSimple(node.argument)
     else if (this.strict && node.operator === "delete" &&
              node.argument.type === "Identifier")
+      // 如果是delete aaa这种类型, 报错       
       this.raiseRecoverable(node.start, "Deleting local variable in strict mode")
     else if (node.operator === "delete" && isPrivateFieldAccess(node.argument))
+      // 如果是私有变量, 则报错
       this.raiseRecoverable(node.start, "Private fields can not be deleted")
     else sawUnary = true
-    expr = this.finishNode(node, update ? "UpdateExpression" : "UnaryExpression")
+    expr = this.finishNode(node, update ? nt.UpdateExpression : nt.UnaryExpression)
   } else if (!sawUnary && this.type === tt.privateId) {
     if (forInit || this.privateNameStack.length === 0) this.unexpected()
+    // 解析私有变量
     expr = this.parsePrivateIdent()
     // only could be private fields in 'in', such as #x in obj
+    // 在这里私有变量下一个词必须接in, 否则错误
     if (this.type !== tt._in) this.unexpected()
   } else {
     expr = this.parseExprSubscripts(refDestructuringErrors, forInit)
+    // 这一段检查没懂
     if (this.checkExpressionErrors(refDestructuringErrors)) return expr
     while (this.type.postfix && !this.canInsertSemicolon()) {
+      // ++/--
       let node = this.startNodeAt(startPos, startLoc)
       node.operator = this.value
       node.prefix = false
       node.argument = expr
       this.checkLValSimple(expr)
       this.next()
-      expr = this.finishNode(node, "UpdateExpression")
+      expr = this.finishNode(node, nt.UnaryExpression)
     }
   }
 
@@ -278,6 +346,7 @@ pp.parseMaybeUnary = function(refDestructuringErrors, sawUnary, incDec, forInit)
   }
 }
 
+// 是否私有变量
 function isPrivateFieldAccess(node) {
   return (
     node.type === "MemberExpression" && node.property.type === "PrivateIdentifier" ||
@@ -286,14 +355,21 @@ function isPrivateFieldAccess(node) {
 }
 
 // Parse call, dot, and `[]`-subscript expressions.
-
-pp.parseExprSubscripts = function(refDestructuringErrors, forInit) {
+/**
+ * 解析调用链或者箭头函数, 主要在parseMaybeUnary中调用.
+ * 正常情况下, 默认会进入这里解析.
+ * @param {*} refDestructuringErrors 
+ * @param {*} forInit 
+ * @returns 
+ */
+pp.parseExprSubscripts = function (refDestructuringErrors, forInit) {
   let startPos = this.start, startLoc = this.startLoc
   let expr = this.parseExprAtom(refDestructuringErrors, forInit)
-  if (expr.type === "ArrowFunctionExpression" && this.input.slice(this.lastTokStart, this.lastTokEnd) !== ")")
+  // 箭头函数
+  if (expr.type === NodeTypes.ArrowFunctionExpression && this.input.slice(this.lastTokStart, this.lastTokEnd) !== ")")
     return expr
   let result = this.parseSubscripts(expr, startPos, startLoc, false, forInit)
-  if (refDestructuringErrors && result.type === "MemberExpression") {
+  if (refDestructuringErrors && result.type === NodeTypes.MemberExpression) {
     if (refDestructuringErrors.parenthesizedAssign >= result.start) refDestructuringErrors.parenthesizedAssign = -1
     if (refDestructuringErrors.parenthesizedBind >= result.start) refDestructuringErrors.parenthesizedBind = -1
     if (refDestructuringErrors.trailingComma >= result.start) refDestructuringErrors.trailingComma = -1
@@ -301,7 +377,18 @@ pp.parseExprSubscripts = function(refDestructuringErrors, forInit) {
   return result
 }
 
-pp.parseSubscripts = function(base, startPos, startLoc, noCalls, forInit) {
+/**
+ * 解析整条调用链, 最后返回的结果是以最后的node开头, 如a.b.c, 返回时返回的是c的node
+ * 这里是读到了字母开头的token进入
+ * @param {Node} base 
+ * @param {number} startPos 
+ * @param {Position} startLoc 
+ * @param {boolean} noCalls 
+ * @param {string} forInit 
+ * @returns 
+ */
+pp.parseSubscripts = function (base, startPos, startLoc, noCalls, forInit) {
+  // async () => {}
   let maybeAsyncArrow = this.options.ecmaVersion >= 8 && base.type === "Identifier" && base.name === "async" &&
       this.lastTokEnd === base.end && !this.canInsertSemicolon() && base.end - base.start === 5 &&
       this.potentialArrowAt === base.start
@@ -310,12 +397,12 @@ pp.parseSubscripts = function(base, startPos, startLoc, noCalls, forInit) {
   while (true) {
     let element = this.parseSubscript(base, startPos, startLoc, noCalls, maybeAsyncArrow, optionalChained, forInit)
 
-    if (element.optional) optionalChained = true
-    if (element === base || element.type === "ArrowFunctionExpression") {
+    if (element.optional) optionalChained = true // 可选链
+    if (element === base || element.type === NodeTypes.ArrowFunctionExpression) {
       if (optionalChained) {
         const chainNode = this.startNodeAt(startPos, startLoc)
         chainNode.expression = element
-        element = this.finishNode(chainNode, "ChainExpression")
+        element = this.finishNode(chainNode, NodeTypes.ChainExpression)
       }
       return element
     }
@@ -324,15 +411,31 @@ pp.parseSubscripts = function(base, startPos, startLoc, noCalls, forInit) {
   }
 }
 
+/**
+ * 解析调用链, 如果有解析到新内容, 则返回新node, 否则返回原有base.
+ * 如果解析到点号, 或者[, 则往下解析新内容, 否则返回base
+ * @param {Node} base 
+ * @param {*} startPos 
+ * @param {*} startLoc 
+ * @param {boolean} noCalls 
+ * @param {boolean} maybeAsyncArrow 可能是async () => {}
+ * @param {*} optionalChained 
+ * @param {*} forInit 
+ * @returns 
+ */
 pp.parseSubscript = function(base, startPos, startLoc, noCalls, maybeAsyncArrow, optionalChained, forInit) {
   let optionalSupported = this.options.ecmaVersion >= 11
+  // ?. 合法调用: obj.val?.prop  obj.val?.[expr] obj.func?.(args)
   let optional = optionalSupported && this.eat(tt.questionDot)
   if (noCalls && optional) this.raise(this.lastTokStart, "Optional chaining cannot appear in the callee of new expressions")
-
+  // []这种情况, 适用于对象和列表类型变量
   let computed = this.eat(tt.bracketL)
+  // []或.或 非?.( 非?.`(但可选链应该不允许后接模版), 解析成员表达式
   if (computed || (optional && this.type !== tt.parenL && this.type !== tt.backQuote) || this.eat(tt.dot)) {
     let node = this.startNodeAt(startPos, startLoc)
+    // 设置父对象
     node.object = base
+    // 解析成员表达式
     if (computed) {
       node.property = this.parseExpression()
       this.expect(tt.bracketR)
@@ -341,17 +444,22 @@ pp.parseSubscript = function(base, startPos, startLoc, noCalls, maybeAsyncArrow,
     } else {
       node.property = this.parseIdent(this.options.allowReserved !== "never")
     }
+    // 是否动态获取
     node.computed = !!computed
     if (optionalSupported) {
+      // 是否可选链
       node.optional = optional
     }
-    base = this.finishNode(node, "MemberExpression")
+    base = this.finishNode(node, NodeTypes.MemberExpression)
   } else if (!noCalls && this.eat(tt.parenL)) {
+    // 读到左括号
     let refDestructuringErrors = new DestructuringErrors, oldYieldPos = this.yieldPos, oldAwaitPos = this.awaitPos, oldAwaitIdentPos = this.awaitIdentPos
     this.yieldPos = 0
     this.awaitPos = 0
     this.awaitIdentPos = 0
+    // 解析出一组表达式, 
     let exprList = this.parseExprList(tt.parenR, this.options.ecmaVersion >= 8, false, refDestructuringErrors)
+    // 进入这里肯定不会是左括号开头, 所以这里如果是箭头函数, 一定是async
     if (maybeAsyncArrow && !optional && !this.canInsertSemicolon() && this.eat(tt.arrow)) {
       this.checkPatternErrors(refDestructuringErrors, false)
       this.checkYieldAwaitInDefaultParams()
@@ -372,15 +480,17 @@ pp.parseSubscript = function(base, startPos, startLoc, noCalls, maybeAsyncArrow,
     if (optionalSupported) {
       node.optional = optional
     }
-    base = this.finishNode(node, "CallExpression")
+    base = this.finishNode(node, NodeTypes.CallExpression)
   } else if (this.type === tt.backQuote) {
+    // https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Template_literals
+    // tag`test ${ddd} zzz` 这种类型
     if (optional || optionalChained) {
       this.raise(this.start, "Optional chaining cannot appear in the tag of tagged template expressions")
     }
     let node = this.startNodeAt(startPos, startLoc)
     node.tag = base
     node.quasi = this.parseTemplate({isTagged: true})
-    base = this.finishNode(node, "TaggedTemplateExpression")
+    base = this.finishNode(node, NodeTypes.TaggedTemplateExpression)
   }
   return base
 }
@@ -389,12 +499,14 @@ pp.parseSubscript = function(base, startPos, startLoc, noCalls, maybeAsyncArrow,
 // expression, an expression started by a keyword like `function` or
 // `new`, or an expression wrapped in punctuation like `()`, `[]`,
 // or `{}`.
-
+/**
+ * 解析单个表达式, 可能是function, 或者new 开头, 或者是被括号包起来的内容.
+ * 
+ */
 pp.parseExprAtom = function(refDestructuringErrors, forInit) {
   // If a division operator appears in an expression position, the
   // tokenizer got confused, and we force it to read a regexp instead.
   if (this.type === tt.slash) this.readRegexp()
-
   let node, canBeArrow = this.potentialArrowAt === this.start
   switch (this.type) {
   case tt._super:
@@ -439,7 +551,7 @@ pp.parseExprAtom = function(refDestructuringErrors, forInit) {
     }
     return id
 
-  case tt.regexp:
+  case tt.regexp: // 这里特指/reg/
     let value = this.value
     node = this.parseLiteral(value.value)
     node.regex = {pattern: value.pattern, flags: value.flags}
@@ -453,7 +565,7 @@ pp.parseExprAtom = function(refDestructuringErrors, forInit) {
     node.value = this.type === tt._null ? null : this.type === tt._true
     node.raw = this.type.keyword
     this.next()
-    return this.finishNode(node, "Literal")
+    return this.finishNode(node, nt.Literal)
 
   case tt.parenL:
     let start = this.start, expr = this.parseParenAndDistinguishExpression(canBeArrow, forInit)
@@ -465,13 +577,13 @@ pp.parseExprAtom = function(refDestructuringErrors, forInit) {
     }
     return expr
 
-  case tt.bracketL:
+  case tt.bracketL: // [
     node = this.startNode()
     this.next()
     node.elements = this.parseExprList(tt.bracketR, true, true, refDestructuringErrors)
-    return this.finishNode(node, "ArrayExpression")
+    return this.finishNode(node, nt.ArrayExpression)
 
-  case tt.braceL:
+  case tt.braceL: // {
     this.overrideContext(tokenCtxTypes.b_expr)
     return this.parseObj(false, refDestructuringErrors)
 
@@ -501,6 +613,10 @@ pp.parseExprAtom = function(refDestructuringErrors, forInit) {
   }
 }
 
+/**
+ * 只在parseExprAtom调用
+ * @returns 
+ */
 pp.parseExprImport = function() {
   const node = this.startNode()
 
@@ -520,6 +636,11 @@ pp.parseExprImport = function() {
   }
 }
 
+/**
+ * 只在parseExprImport调用
+ * @param {*} node 
+ * @returns 
+ */
 pp.parseDynamicImport = function(node) {
   this.next() // skip `(`
 
@@ -539,6 +660,11 @@ pp.parseDynamicImport = function(node) {
   return this.finishNode(node, "ImportExpression")
 }
 
+/**
+ * 只在parseExprImport调用
+ * @param {*} node 
+ * @returns 
+ */
 pp.parseImportMeta = function(node) {
   this.next() // skip `.`
 
@@ -564,6 +690,10 @@ pp.parseLiteral = function(value) {
   return this.finishNode(node, "Literal")
 }
 
+/**
+ * 解析表达式语句, 类似while (aaa > bbb)的括号部分
+ * @returns {Node}
+ */
 pp.parseParenExpression = function() {
   this.expect(tt.parenL)
   let val = this.parseExpression()
@@ -571,6 +701,12 @@ pp.parseParenExpression = function() {
   return val
 }
 
+/**
+ * 只在parseExprAtom中调用, 在遇到(时调用
+ * @param {boolean} canBeArrow 
+ * @param {*} forInit 
+ * @returns 
+ */
 pp.parseParenAndDistinguishExpression = function(canBeArrow, forInit) {
   let startPos = this.start, startLoc = this.startLoc, val, allowTrailingComma = this.options.ecmaVersion >= 8
   if (this.options.ecmaVersion >= 6) {
@@ -616,7 +752,8 @@ pp.parseParenAndDistinguishExpression = function(canBeArrow, forInit) {
     if (exprList.length > 1) {
       val = this.startNodeAt(innerStartPos, innerStartLoc)
       val.expressions = exprList
-      this.finishNodeAt(val, "SequenceExpression", innerEndPos, innerEndLoc)
+      // 只有这里会设置为Sequence Expression
+      this.finishNodeAt(val, nt.SequenceExpression, innerEndPos, innerEndLoc)
     } else {
       val = exprList[0]
     }
@@ -633,10 +770,12 @@ pp.parseParenAndDistinguishExpression = function(canBeArrow, forInit) {
   }
 }
 
+/** 无作用 */
 pp.parseParenItem = function(item) {
   return item
 }
 
+/** 只在parseExprAtom中调用 */
 pp.parseParenArrowList = function(startPos, startLoc, exprList, forInit) {
   return this.parseArrowExpression(this.startNodeAt(startPos, startLoc), exprList, false, forInit)
 }
@@ -649,6 +788,10 @@ pp.parseParenArrowList = function(startPos, startLoc, exprList, forInit) {
 
 const empty = []
 
+/**
+ * 只在parseExprAtom中调用, 解析new.target, new func, new func(xxx)
+ * @returns 
+ */
 pp.parseNew = function() {
   if (this.containsEsc) this.raiseRecoverable(this.start, "Escape sequence in keyword new")
   let node = this.startNode()
@@ -663,7 +806,7 @@ pp.parseNew = function() {
       this.raiseRecoverable(node.start, "'new.target' must not contain escaped characters")
     if (!this.allowNewDotTarget)
       this.raiseRecoverable(node.start, "'new.target' can only be used in functions and class static block")
-    return this.finishNode(node, "MetaProperty")
+    return this.finishNode(node, nt.MetaProperty)
   }
   let startPos = this.start, startLoc = this.startLoc, isImport = this.type === tt._import
   node.callee = this.parseSubscripts(this.parseExprAtom(), startPos, startLoc, true, false)
@@ -672,11 +815,15 @@ pp.parseNew = function() {
   }
   if (this.eat(tt.parenL)) node.arguments = this.parseExprList(tt.parenR, this.options.ecmaVersion >= 8, false)
   else node.arguments = empty
-  return this.finishNode(node, "NewExpression")
+  return this.finishNode(node, nt.NewExpression)
 }
 
 // Parse template expression.
-
+/**
+ * 只在parseTemplate中调用
+ * @param {*} param0 
+ * @returns 
+ */
 pp.parseTemplateElement = function({isTagged}) {
   let elem = this.startNode()
   if (this.type === tt.invalidTemplate) {
@@ -698,6 +845,12 @@ pp.parseTemplateElement = function({isTagged}) {
   return this.finishNode(elem, "TemplateElement")
 }
 
+/**
+ * 在parseSubscript和parseExprAtom中, 读到`时调用
+ * 返回的node中, 有quasis和expressions两组列表, 类似`a${b}c`这种, 解析结果为quasis=[a,c], expressions=[b]
+ * @param {*} param0 
+ * @returns 
+ */
 pp.parseTemplate = function({isTagged = false} = {}) {
   let node = this.startNode()
   this.next()
@@ -714,7 +867,7 @@ pp.parseTemplate = function({isTagged = false} = {}) {
   this.next()
   return this.finishNode(node, "TemplateLiteral")
 }
-
+// 判断是否async 参数
 pp.isAsyncProp = function(prop) {
   return !prop.computed && prop.key.type === "Identifier" && prop.key.name === "async" &&
     (this.type === tt.name || this.type === tt.num || this.type === tt.string || this.type === tt.bracketL || this.type.keyword || (this.options.ecmaVersion >= 9 && this.type === tt.star)) &&
@@ -722,33 +875,48 @@ pp.isAsyncProp = function(prop) {
 }
 
 // Parse an object literal or binding pattern.
-
-pp.parseObj = function(isPattern, refDestructuringErrors) {
+/**
+ * 解析一个object
+ * 例如let a = {a: 1, b: 2}, let {a, b = 2} = aaa,  
+ * @param {boolean} isPattern 表示非初始化式
+ * @param {*} refDestructuringErrors 
+ * @returns 
+ */
+pp.parseObj = function (isPattern, refDestructuringErrors) {
   let node = this.startNode(), first = true, propHash = {}
   node.properties = []
   this.next()
+  // 循环读取, 直到遇到结束符}
   while (!this.eat(tt.braceR)) {
     if (!first) {
       this.expect(tt.comma)
       if (this.options.ecmaVersion >= 5 && this.afterTrailingComma(tt.braceR)) break
     } else first = false
-
+    // 使用parseProperty解析出prop的属性, 这里有两种模式key和key: val
     const prop = this.parseProperty(isPattern, refDestructuringErrors)
     if (!isPattern) this.checkPropClash(prop, propHash, refDestructuringErrors)
     node.properties.push(prop)
   }
-  return this.finishNode(node, isPattern ? "ObjectPattern" : "ObjectExpression")
+  return this.finishNode(node, isPattern ? NodeTypes.ObjectPattern : NodeTypes.ObjectExpression)
 }
 
+/**
+ * 只有parseObj调用
+ * 通常有3种形式: key, key: val, ...keys, 还有特殊形式: function定义, 如`{ fn(){}, async fn1(){}, *gen(){} }`
+ * @param {boolean} isPattern 表示非初始化式
+ * @param {*} refDestructuringErrors 
+ * @returns 
+ */
 pp.parseProperty = function(isPattern, refDestructuringErrors) {
   let prop = this.startNode(), isGenerator, isAsync, startPos, startLoc
+  // 如果读到...
   if (this.options.ecmaVersion >= 9 && this.eat(tt.ellipsis)) {
     if (isPattern) {
       prop.argument = this.parseIdent(false)
       if (this.type === tt.comma) {
         this.raise(this.start, "Comma is not permitted after the rest element")
       }
-      return this.finishNode(prop, "RestElement")
+      return this.finishNode(prop, NodeTypes.RestElement)
     }
     // Parse argument.
     prop.argument = this.parseMaybeAssign(false, refDestructuringErrors)
@@ -757,7 +925,7 @@ pp.parseProperty = function(isPattern, refDestructuringErrors) {
       refDestructuringErrors.trailingComma = this.start
     }
     // Finish
-    return this.finishNode(prop, "SpreadElement")
+    return this.finishNode(prop, NodeTypes.SpreadElement)
   }
   if (this.options.ecmaVersion >= 6) {
     prop.method = false
@@ -767,11 +935,12 @@ pp.parseProperty = function(isPattern, refDestructuringErrors) {
       startLoc = this.startLoc
     }
     if (!isPattern)
-      isGenerator = this.eat(tt.star)
+      isGenerator = this.eat(tt.star) // generator 判断
   }
   let containsEsc = this.containsEsc
   this.parsePropertyName(prop)
   if (!isPattern && !containsEsc && this.options.ecmaVersion >= 8 && !isGenerator && this.isAsyncProp(prop)) {
+    // { async fn() { } } | { *fn() { } }
     isAsync = true
     isGenerator = this.options.ecmaVersion >= 9 && this.eat(tt.star)
     this.parsePropertyName(prop, refDestructuringErrors)
@@ -782,23 +951,41 @@ pp.parseProperty = function(isPattern, refDestructuringErrors) {
   return this.finishNode(prop, "Property")
 }
 
+/**
+ * 只在parseProperty中调用
+ * 解析property的值, 这里有两种形式, 冒号后赋值语句, { fn(){} }这种特殊形式下的函数定义语句.
+ * @param {Node} prop 
+ * @param {boolean} isPattern 表示非初始化式
+ * @param {boolean} isGenerator 
+ * @param {boolean} isAsync 
+ * @param {*} startPos 
+ * @param {*} startLoc 
+ * @param {*} refDestructuringErrors 
+ * @param {*} containsEsc 表示是否前面存在反斜杠
+ */
 pp.parsePropertyValue = function(prop, isPattern, isGenerator, isAsync, startPos, startLoc, refDestructuringErrors, containsEsc) {
-  if ((isGenerator || isAsync) && this.type === tt.colon)
+  if ((isGenerator || isAsync) && this.type === tt.colon) // 函数定义的时候不能接冒号
     this.unexpected()
 
   if (this.eat(tt.colon)) {
+    // 如果读到冒号, 则此时设置kind为init, 判断是否isPattern, 是则调用`parseMaybeDefault`读出值, 否则调用`parseMaybeAssign`读出值, 设置到value中
     prop.value = isPattern ? this.parseMaybeDefault(this.start, this.startLoc) : this.parseMaybeAssign(false, refDestructuringErrors)
     prop.kind = "init"
   } else if (this.options.ecmaVersion >= 6 && this.type === tt.parenL) {
     if (isPattern) this.unexpected()
+    // 判断当前是否读到`(`, 如果是, 则判断isPattern, 如果是则报错, 否则, 设置method为true, 然后调用`parseMethod`解析函数定义, 设置到init上
+    // 对应的是`{ fn(){}, *genera(){}, async func(){} }`三种情况
     prop.kind = "init"
     prop.method = true
+    // 解析内容
     prop.value = this.parseMethod(isGenerator, isAsync)
   } else if (!isPattern && !containsEsc &&
-             this.options.ecmaVersion >= 5 && !prop.computed && prop.key.type === "Identifier" &&
+             this.options.ecmaVersion >= 5 && !prop.computed && prop.key.type === NodeTypes.Identifier &&
              (prop.key.name === "get" || prop.key.name === "set") &&
              (this.type !== tt.comma && this.type !== tt.braceR && this.type !== tt.eq)) {
     if (isGenerator || isAsync) this.unexpected()
+    // 判断当前type为`Identifier`, 并且name为get或set的时候, 将name设置到kind中
+    // 然后调用`parsePropertyName`解析出对应的变量名, 然后调用`parseMethod`解析出运算表达式, 设置到node.value中
     prop.kind = prop.key.name
     this.parsePropertyName(prop)
     prop.value = this.parseMethod(false)
@@ -816,6 +1003,7 @@ pp.parsePropertyValue = function(prop, isPattern, isGenerator, isAsync, startPos
   } else if (this.options.ecmaVersion >= 6 && !prop.computed && prop.key.type === "Identifier") {
     if (isGenerator || isAsync) this.unexpected()
     this.checkUnreserved(prop.key)
+    // 对应{ a }, 或者let { a = 2} = xxx
     if (prop.key.name === "await" && !this.awaitIdentPos)
       this.awaitIdentPos = startPos
     prop.kind = "init"
@@ -832,22 +1020,34 @@ pp.parsePropertyValue = function(prop, isPattern, isGenerator, isAsync, startPos
   } else this.unexpected()
 }
 
+/**
+ * 解析出prop变量, 如{ key: val}的key
+ * @param {Node} prop 
+ * @returns {Node}
+ */
 pp.parsePropertyName = function(prop) {
   if (this.options.ecmaVersion >= 6) {
     if (this.eat(tt.bracketL)) {
+      // { [aaa= 'bbb']: 21 }
       prop.computed = true
-      prop.key = this.parseMaybeAssign()
+      prop.key = this.parseMaybeAssign() // 解析[]中的key值
       this.expect(tt.bracketR)
       return prop.key
     } else {
       prop.computed = false
     }
   }
-  return prop.key = this.type === tt.num || this.type === tt.string ? this.parseExprAtom() : this.parseIdent(this.options.allowReserved !== "never")
+  return prop.key = this.type === tt.num || this.type === tt.string ?
+    this.parseExprAtom() // 解析表达式
+    :
+    this.parseIdent(this.options.allowReserved !== "never") // 解析单个变量
 }
 
 // Initialize empty function node.
 
+/**
+ * 初始化function的node
+ */
 pp.initFunction = function(node) {
   node.id = null
   if (this.options.ecmaVersion >= 6) node.generator = node.expression = false
@@ -855,7 +1055,13 @@ pp.initFunction = function(node) {
 }
 
 // Parse object or class method.
-
+/**
+ * 解析object或者class 方法, 在parseObj或者parseClassMethod中调用
+ * @param {*} isGenerator 
+ * @param {*} isAsync 
+ * @param {*} allowDirectSuper 
+ * @returns 
+ */
 pp.parseMethod = function(isGenerator, isAsync, allowDirectSuper) {
   let node = this.startNode(), oldYieldPos = this.yieldPos, oldAwaitPos = this.awaitPos, oldAwaitIdentPos = this.awaitIdentPos
 
@@ -882,7 +1088,14 @@ pp.parseMethod = function(isGenerator, isAsync, allowDirectSuper) {
 }
 
 // Parse arrow function expression with given parameters.
-
+/**
+ * 解析箭头函数
+ * @param {Node} node 
+ * @param {*} params 
+ * @param {*} isAsync 
+ * @param {*} forInit 
+ * @returns 
+ */
 pp.parseArrowExpression = function(node, params, isAsync, forInit) {
   let oldYieldPos = this.yieldPos, oldAwaitPos = this.awaitPos, oldAwaitIdentPos = this.awaitIdentPos
 
@@ -905,6 +1118,13 @@ pp.parseArrowExpression = function(node, params, isAsync, forInit) {
 
 // Parse function body and check parameters.
 
+/**
+ * 解析函数执行体.  设置到node.body
+ * @param {*} node 
+ * @param {boolean} isArrowFunction 
+ * @param {boolean} isMethod 
+ * @param {*} forInit 
+ */
 pp.parseFunctionBody = function(node, isArrowFunction, isMethod, forInit) {
   let isExpression = isArrowFunction && this.type !== tt.braceL
   let oldStrict = this.strict, useStrict = false
@@ -962,7 +1182,14 @@ pp.checkParams = function(node, allowDuplicates) {
 // `allowEmpty` can be turned on to allow subsequent commas with
 // nothing in between them to be parsed as `null` (which is needed
 // for array literals).
-
+/**
+ * 解析一组表达式列表
+ * @param {TokenType} close 停止符
+ * @param {boolean} allowTrailingComma 
+ * @param {boolean} allowEmpty 
+ * @param {*} refDestructuringErrors 
+ * @returns {Node[]}
+ */
 pp.parseExprList = function(close, allowTrailingComma, allowEmpty, refDestructuringErrors) {
   let elts = [], first = true
   while (!this.eat(close)) {
@@ -986,6 +1213,10 @@ pp.parseExprList = function(close, allowTrailingComma, allowEmpty, refDestructur
   return elts
 }
 
+/**
+ * 检查变量名合法性
+ * @returns 
+ */
 pp.checkUnreserved = function({start, end, name}) {
   if (this.inGenerator && name === "yield")
     this.raiseRecoverable(start, "Cannot use 'yield' as identifier inside a generator")
@@ -1010,7 +1241,12 @@ pp.checkUnreserved = function({start, end, name}) {
 // Parse the next token as an identifier. If `liberal` is true (used
 // when parsing properties), it will also convert keywords into
 // identifiers.
-
+/**
+ * 解析当前token并作为变量类型返回
+ * @param {boolean} liberal 是否解析properties
+ * @param {boolean} isBinding 
+ * @returns 
+ */
 pp.parseIdent = function(liberal, isBinding) {
   let node = this.startNode()
   if (this.type === tt.name) {
@@ -1023,7 +1259,7 @@ pp.parseIdent = function(liberal, isBinding) {
     // But there is no chance to pop the context if the keyword is consumed as an identifier such as a property name.
     // If the previous token is a dot, this does not apply because the context-managing code already ignored the keyword
     if ((node.name === "class" || node.name === "function") &&
-        (this.lastTokEnd !== this.lastTokStart + 1 || this.input.charCodeAt(this.lastTokStart) !== 46)) {
+        (this.lastTokEnd !== this.lastTokStart + 1 || this.input.charCodeAt(this.lastTokStart) !== 46)) { // 46 .
       this.context.pop()
     }
   } else {
@@ -1039,6 +1275,10 @@ pp.parseIdent = function(liberal, isBinding) {
   return node
 }
 
+/**
+ * 解析#开头的私有变量, 并插入到privateNameStack中
+ * @returns 
+ */
 pp.parsePrivateIdent = function() {
   const node = this.startNode()
   if (this.type === tt.privateId) {
@@ -1060,7 +1300,11 @@ pp.parsePrivateIdent = function() {
 }
 
 // Parses yield expression inside generator.
-
+/**
+ * parseMaybeAssign中调用
+ * @param {*} forInit 
+ * @returns 
+ */
 pp.parseYield = function(forInit) {
   if (!this.yieldPos) this.yieldPos = this.start
 
@@ -1076,11 +1320,17 @@ pp.parseYield = function(forInit) {
   return this.finishNode(node, "YieldExpression")
 }
 
+/**
+ * parseMaybeUnary中调用
+ * 如await aaa()或者await promise, 返回AwaitExpression, 并将调用的内容使用parseMaybeUnary解析出来设置为argument
+ * @param {*} forInit 
+ * @returns 
+ */
 pp.parseAwait = function(forInit) {
   if (!this.awaitPos) this.awaitPos = this.start
 
   let node = this.startNode()
   this.next()
   node.argument = this.parseMaybeUnary(null, true, false, forInit)
-  return this.finishNode(node, "AwaitExpression")
+  return this.finishNode(node, NodeTypes.AwaitExpression)
 }

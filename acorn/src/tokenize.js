@@ -51,6 +51,7 @@ pp.next = function(ignoreEscapeSequenceInKeyword) {
   this.lastTokEndLoc = this.endLoc
   this.lastTokStartLoc = this.startLoc
   this.nextToken()
+
 }
 
 /** tokenizer的时候, 手动调用获取下一个token内容 */
@@ -886,6 +887,7 @@ pp.readWord1 = function() {
 // words when necessary.
 /**
  * 读出一个合法的变量名, 如果是keyword, 则作为keyword返回, 否则作为变量返回.
+ * let 关键词被单独处理, 会作为name返回
  */
 pp.readWord = function() {
   let word = this.readWord1()

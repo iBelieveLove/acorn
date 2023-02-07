@@ -1,7 +1,35 @@
 import {Parser} from "./state.js"
 import {Position, SourceLocation} from "./locutil.js"
+import { TokenType } from "./tokentype.js";
 
 export class Node {
+  /**
+   * 用于指示break和continue的时候跳出到哪个循环.
+   * @type {Node | null}
+   */
+  // label
+  /** @type {Node | undefined} 条件语句设置, 比如for循环的中间语句 */
+  // test
+  /** @type {Node} */
+  // body
+  /** @type {Node | undefined} */
+  // init = undefined; // for 循环中的初始化语句
+  /** @type {Node} for循环中的update语句 */
+  // update = undefined;
+  // declarations Node[] 在VariableDeclaration时设置, 定义当前var设置的变量列表
+  // expression
+  // expressions 表达式列表, 如let a,b,c = xxx中的abc
+  // argument 在await中会设置, 存放await后的调用
+  // {Node} property 设置成员表达式, 包括[1], ['a'], .aaa 3种类型
+  // {Node }object 设置父对象, 比如 aaa.bbb时, bbb的node.object设置为aaa的node
+  // {boolean} computed 设置是否动态获取, 比如[1], ['a']
+  // {boolean} optional 是否可选链
+  // {Node} callee, 比如fn() 中的fn
+  // {Node[]} arguments, 比如fn(a,b,c)中的a,b,c
+  // {Node} tag, 用于tag template
+  // {Node} quasi, 用于设置template
+  // {string} operator, 设置操作符, 如+=, -=, =
+
   /**
    * 
    * @param {Parser} parser 
@@ -50,7 +78,14 @@ pp.startNodeAt = function(pos, loc) {
 }
 
 // Finish an AST node, adding `type` and `end` properties.
-
+/**
+ * 
+ * @param {Node} node 
+ * @param {string} type 
+ * @param {number} pos 
+ * @param {Position} loc 
+ * @returns 
+ */
 function finishNodeAt(node, type, pos, loc) {
   node.type = type
   node.end = pos
@@ -61,6 +96,12 @@ function finishNodeAt(node, type, pos, loc) {
   return node
 }
 
+/**
+ * 
+ * @param {Node} node 
+ * @param {string} type 
+ * @returns 
+ */
 pp.finishNode = function (node, type) {
   return finishNodeAt.call(this, node, type, this.lastTokEnd, this.lastTokEndLoc)
 }

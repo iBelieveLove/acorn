@@ -1,4 +1,4 @@
-import {types as tt} from "./tokentype.js"
+import {NodeTypes, types as tt} from "./tokentype.js"
 import {Parser} from "./state.js"
 import {lineBreak, skipWhiteSpace} from "./whitespace.js"
 import {isIdentifierStart, isIdentifierChar, keywordRelationalOperator} from "./identifier.js"
@@ -28,21 +28,28 @@ pp.parseTopLevel = function(node) {
     node.body.push(stmt)
   }
   if (this.inModule)
+    // undefined exports在checkLocalExport时插入, 如果是没有定义的本地变量, 则报错.
     for (let name of Object.keys(this.undefinedExports))
       this.raiseRecoverable(this.undefinedExports[name].start, `Export '${name}' is not defined`)
   this.adaptDirectivePrologue(node.body)
   this.next()
   node.sourceType = this.options.sourceType
-  return this.finishNode(node, "Program")
+  return this.finishNode(node, NodeTypes.Program)
 }
 
 /** 定义类型 */
 const loopLabel = {kind: "loop"}, switchLabel = {kind: "switch"}
 
+/**
+ * 判断是否let表达式, 此时TokenType为name
+ * let和var, const不一样, 单独处理
+ * @param {any} context
+ * */
 pp.isLet = function(context) {
   if (this.options.ecmaVersion < 6 || !this.isContextual("let")) return false
   skipWhiteSpace.lastIndex = this.pos
   let skip = skipWhiteSpace.exec(this.input)
+  // 获取到下一个变量
   let next = this.pos + skip[0].length, nextCh = this.input.charCodeAt(next)
   // For ambiguous cases, determine if a LexicalDeclaration (or only a
   // Statement) is allowed here. If context is not empty then only a Statement
@@ -65,6 +72,7 @@ pp.isLet = function(context) {
 // check 'async [no LineTerminator here] function'
 // - 'async /*foo*/ function' is OK.
 // - 'async /*\n*/ function' is invalid.
+// 校验async 和function中间不可以有换行符
 pp.isAsyncFunction = function() {
   if (this.options.ecmaVersion < 8 || !this.isContextual("async"))
     return false
@@ -89,15 +97,16 @@ pp.isAsyncFunction = function() {
  * 解析单个statement
  * 比如`class node {}`, `let n = new node();`, `const num = 1`都是一个单独的statement
  * 所以区分的方式是分号, 换行, 或者大括号
- * @param {null | string} context 
+ * @param {null | string} context 作用在于判断上层类型.
  * @param {boolean} topLevel 
  * @param {Record<string, unknown>} exports 
- * @returns 
+ * @returns {Node}
  */
 pp.parseStatement = function(context, topLevel, exports) {
   let starttype = this.type, node = this.startNode(), kind
 
   if (this.isLet(context)) {
+    // 如果是let表达式, tokenType转换为var
     starttype = tt._var
     kind = "let"
   }
@@ -160,7 +169,7 @@ pp.parseStatement = function(context, topLevel, exports) {
     if (this.isAsyncFunction()) {
       if (context) this.unexpected()
       this.next()
-      return this.parseFunctionStatement(node, true, !context)
+      return this.parseFunctionStatement(node, true, !context) // 这里!context为true
     }
 
     let maybeName = this.value, expr = this.parseExpression()
@@ -170,6 +179,12 @@ pp.parseStatement = function(context, topLevel, exports) {
   }
 }
 
+/**
+ * 解析break或者continue
+ * @param {Node} node 
+ * @param {string} keyword 
+ * @returns {Node}
+ */
 pp.parseBreakContinueStatement = function(node, keyword) {
   let isBreak = keyword === "break"
   this.next()
@@ -186,22 +201,34 @@ pp.parseBreakContinueStatement = function(node, keyword) {
   for (; i < this.labels.length; ++i) {
     let lab = this.labels[i]
     if (node.label == null || lab.name === node.label.name) {
+      // 判断continue或break, 如果是continue, 则要求是循环
       if (lab.kind != null && (isBreak || lab.kind === "loop")) break
+      // break 到label.name上, 这里可以不是循环
       if (node.label && isBreak) break
     }
   }
   if (i === this.labels.length) this.raise(node.start, "Unsyntactic " + keyword)
-  return this.finishNode(node, isBreak ? "BreakStatement" : "ContinueStatement")
+  return this.finishNode(node, isBreak ? NodeTypes.BreakStatement : NodeTypes.ContinueStatement)
 }
 
+/**
+ * 
+ * @param {Node} node 
+ * @returns {Node}
+ */
 pp.parseDebuggerStatement = function(node) {
   this.next()
   this.semicolon()
-  return this.finishNode(node, "DebuggerStatement")
+  return this.finishNode(node, NodeTypes.DebuggerStatement)
 }
 
+/**
+ * @param {Node} node 
+ * @returns {Node}
+ */
 pp.parseDoStatement = function(node) {
   this.next()
+  // 记录label用于break或continue
   this.labels.push(loopLabel)
   node.body = this.parseStatement("do")
   this.labels.pop()
@@ -211,7 +238,7 @@ pp.parseDoStatement = function(node) {
     this.eat(tt.semi)
   else
     this.semicolon()
-  return this.finishNode(node, "DoWhileStatement")
+  return this.finishNode(node, NodeTypes.DoWhileStatement)
 }
 
 // Disambiguating between a `for` and a `for`/`in` or `for`/`of`
@@ -221,9 +248,14 @@ pp.parseDoStatement = function(node) {
 // whether the next token is `in` or `of`. When there is no init
 // part (semicolon immediately after the opening parenthesis), it
 // is a regular `for` loop.
-
+/**
+ * for循环有几种类型, 1 for-in 2 for-of 3 for(;;)
+ * @param {Node} node 
+ * @returns {Node}
+ */
 pp.parseForStatement = function(node) {
   this.next()
+  // 判断第一个是否await
   let awaitAt = (this.options.ecmaVersion >= 9 && this.canAwait && this.eatContextual("await")) ? this.lastTokStart : -1
   this.labels.push(loopLabel)
   this.enterScope(0)
@@ -234,14 +266,17 @@ pp.parseForStatement = function(node) {
   }
   let isLet = this.isLet()
   if (this.type === tt._var || this.type === tt._const || isLet) {
+    // 默认情况下进入此分支
     let init = this.startNode(), kind = isLet ? "let" : this.value
     this.next()
     this.parseVar(init, true, kind)
-    this.finishNode(init, "VariableDeclaration")
+    this.finishNode(init, NodeTypes.VariableDeclaration)
     if ((this.type === tt._in || (this.options.ecmaVersion >= 6 && this.isContextual("of"))) && init.declarations.length === 1) {
       if (this.options.ecmaVersion >= 9) {
         if (this.type === tt._in) {
           if (awaitAt > -1) this.unexpected(awaitAt)
+          // https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Statements/for-await...of
+          // 在of迭代的时候, 允许await, for await (let xxx of xxxx)
         } else node.await = awaitAt > -1
       }
       return this.parseForIn(node, init)
@@ -249,7 +284,11 @@ pp.parseForStatement = function(node) {
     if (awaitAt > -1) this.unexpected(awaitAt)
     return this.parseFor(node, init)
   }
+
+  // https://github.com/acornjs/acorn/issues/1009
+  // 极端情况
   let startsWithLet = this.isContextual("let"), isForOf = false
+  // for (aaa of bbb)
   let refDestructuringErrors = new DestructuringErrors
   let init = this.parseExpression(awaitAt > -1 ? "await" : true, refDestructuringErrors)
   if (this.type === tt._in || (isForOf = this.options.ecmaVersion >= 6 && this.isContextual("of"))) {
@@ -269,20 +308,29 @@ pp.parseForStatement = function(node) {
   return this.parseFor(node, init)
 }
 
+/** 调用`parseFunction`得到返回值, context存在时, declarationPosition为true
+ * 只有context为if或者label时为false, 否则为true
+ * @param {boolean} declarationPosition
+ */
 pp.parseFunctionStatement = function(node, isAsync, declarationPosition) {
   this.next()
   return this.parseFunction(node, FUNC_STATEMENT | (declarationPosition ? 0 : FUNC_HANGING_STATEMENT), false, isAsync)
 }
 
+/**
+ * 解析if语句表达式和内部运算块
+ * 如if () {} else if () {} else {}
+ * */
 pp.parseIfStatement = function(node) {
   this.next()
   node.test = this.parseParenExpression()
   // allow function declarations in branches, but only in non-strict mode
   node.consequent = this.parseStatement("if")
   node.alternate = this.eat(tt._else) ? this.parseStatement("if") : null
-  return this.finishNode(node, "IfStatement")
+  return this.finishNode(node, NodeTypes.IfStatement)
 }
 
+/** 解析return, 判断下一个token读到的是否分号, 如果不是则解析返回内容设置到argument上 */
 pp.parseReturnStatement = function(node) {
   if (!this.inFunction && !this.options.allowReturnOutsideFunction)
     this.raise(this.start, "'return' outside of function")
@@ -294,9 +342,14 @@ pp.parseReturnStatement = function(node) {
 
   if (this.eat(tt.semi) || this.insertSemicolon()) node.argument = null
   else { node.argument = this.parseExpression(); this.semicolon() }
-  return this.finishNode(node, "ReturnStatement")
+  return this.finishNode(node, NodeTypes.ReturnStatement)
 }
 
+/**
+ * 解析switch
+ * @param {*} node 
+ * @returns 
+ */
 pp.parseSwitchStatement = function(node) {
   this.next()
   node.discriminant = this.parseParenExpression()
@@ -313,7 +366,7 @@ pp.parseSwitchStatement = function(node) {
   for (let sawDefault = false; this.type !== tt.braceR;) {
     if (this.type === tt._case || this.type === tt._default) {
       let isCase = this.type === tt._case
-      if (cur) this.finishNode(cur, "SwitchCase")
+      if (cur) this.finishNode(cur, NodeTypes.SwitchCase)
       node.cases.push(cur = this.startNode())
       cur.consequent = []
       this.next()
@@ -331,25 +384,27 @@ pp.parseSwitchStatement = function(node) {
     }
   }
   this.exitScope()
-  if (cur) this.finishNode(cur, "SwitchCase")
+  if (cur) this.finishNode(cur, NodeTypes.SwitchCase)
   this.next() // Closing brace
   this.labels.pop()
-  return this.finishNode(node, "SwitchStatement")
+  return this.finishNode(node, NodeTypes.SwitchStatement)
 }
 
+/** 解析throw */
 pp.parseThrowStatement = function(node) {
   this.next()
   if (lineBreak.test(this.input.slice(this.lastTokEnd, this.start)))
     this.raise(this.lastTokEnd, "Illegal newline after throw")
   node.argument = this.parseExpression()
   this.semicolon()
-  return this.finishNode(node, "ThrowStatement")
+  return this.finishNode(node, NodeTypes.ThrowStatement)
 }
 
 // Reused empty array added for node fields that are always empty.
 
 const empty = []
 
+/** 解析try catch */
 pp.parseTryStatement = function(node) {
   this.next()
   node.block = this.parseBlock()
@@ -370,43 +425,68 @@ pp.parseTryStatement = function(node) {
     }
     clause.body = this.parseBlock(false)
     this.exitScope()
-    node.handler = this.finishNode(clause, "CatchClause")
+    node.handler = this.finishNode(clause, NodeTypes.CatchClause)
   }
   node.finalizer = this.eat(tt._finally) ? this.parseBlock() : null
   if (!node.handler && !node.finalizer)
     this.raise(node.start, "Missing catch or finally clause")
-  return this.finishNode(node, "TryStatement")
+  return this.finishNode(node, NodeTypes.TryStatement)
 }
 
+/**
+ * `let a = 1`定义赋值
+ * @param {string} kind, 可能是let, const, var
+ */
 pp.parseVarStatement = function(node, kind) {
   this.next()
+  // 调用parseVar解析等号左右
   this.parseVar(node, false, kind)
+  // 尝试插入分号
   this.semicolon()
-  return this.finishNode(node, "VariableDeclaration")
+  return this.finishNode(node, NodeTypes.VariableDeclaration)
 }
 
+/**
+ * while() {}
+ * 解析while
+ */
 pp.parseWhileStatement = function(node) {
   this.next()
   node.test = this.parseParenExpression()
   this.labels.push(loopLabel)
   node.body = this.parseStatement("while")
   this.labels.pop()
-  return this.finishNode(node, "WhileStatement")
+  return this.finishNode(node, NodeTypes.WhileStatement)
 }
 
+/** 解析with, 这个用的少, 语法是
+ * with (expression) {
+    statement
+  }
+  'with'语句将某个对象添加到作用域链的顶部，如果在 statement 中有某个未使用命名空间的变量，跟作用域链中的某个属性同名，则这个变量将指向这个属性值
+*/
 pp.parseWithStatement = function(node) {
   if (this.strict) this.raise(this.start, "'with' in strict mode")
   this.next()
   node.object = this.parseParenExpression()
   node.body = this.parseStatement("with")
-  return this.finishNode(node, "WithStatement")
+  return this.finishNode(node, NodeTypes.WithStatement)
 }
 
+/** 空内容, {} */
 pp.parseEmptyStatement = function(node) {
   this.next()
-  return this.finishNode(node, "EmptyStatement")
+  return this.finishNode(node, NodeTypes.EmptyStatement)
 }
 
+/**
+ * 解析label的内容, label: statement
+ * @param {Node} node 
+ * @param {string} maybeName 
+ * @param {Node} expr 
+ * @param {string | null} context 
+ * @returns 
+ */
 pp.parseLabeledStatement = function(node, maybeName, expr, context) {
   for (let label of this.labels)
     if (label.name === maybeName)
@@ -415,6 +495,7 @@ pp.parseLabeledStatement = function(node, maybeName, expr, context) {
   for (let i = this.labels.length - 1; i >= 0; i--) {
     let label = this.labels[i]
     if (label.statementStart === node.start) {
+      // 不明白为什么要更新这个
       // Update information about previous labels on this node
       label.statementStart = this.start
       label.kind = kind
@@ -424,19 +505,31 @@ pp.parseLabeledStatement = function(node, maybeName, expr, context) {
   node.body = this.parseStatement(context ? context.indexOf("label") === -1 ? context + "label" : context : "label")
   this.labels.pop()
   node.label = expr
-  return this.finishNode(node, "LabeledStatement")
+  return this.finishNode(node, NodeTypes.LabeledStatement)
 }
 
+/**
+ * 类似 a = 1这种
+ * @param {Node} node 
+ * @param {Node} expr 
+ * @returns 
+ */
 pp.parseExpressionStatement = function(node, expr) {
   node.expression = expr
   this.semicolon()
-  return this.finishNode(node, "ExpressionStatement")
+  return this.finishNode(node, NodeTypes.ExpressionStatement)
 }
 
 // Parse a semicolon-enclosed block of statements, handling `"use
 // strict"` declarations when `allowStrict` is true (used for
 // function bodies).
-
+/**
+ * 解析一个代码块,  即`{}`包起来的一组代码
+ * @param {*} createNewLexicalScope 是否进入新作用域, 在catch或者function后为false
+ * @param {*} node 
+ * @param {*} exitStrict 只有在function后可能设为true
+ * @returns 
+ */
 pp.parseBlock = function(createNewLexicalScope = true, node = this.startNode(), exitStrict) {
   node.body = []
   this.expect(tt.braceL)
@@ -448,16 +541,16 @@ pp.parseBlock = function(createNewLexicalScope = true, node = this.startNode(), 
   if (exitStrict) this.strict = false
   this.next()
   if (createNewLexicalScope) this.exitScope()
-  return this.finishNode(node, "BlockStatement")
+  return this.finishNode(node, NodeTypes.BlockStatement)
 }
 
 // Parse a regular `for` loop. The disambiguation code in
 // `parseStatement` will already have parsed the init statement or
 // expression.
 /**
- * 
+ * 解析for(init; test; update;) 循环
  * @param {Node} node 
- * @param {*} init 
+ * @param {Node} init expression
  * @returns 
  */
 pp.parseFor = function(node, init) {
@@ -470,16 +563,22 @@ pp.parseFor = function(node, init) {
   node.body = this.parseStatement("for")
   this.exitScope()
   this.labels.pop()
-  return this.finishNode(node, "ForStatement")
+  return this.finishNode(node, NodeTypes.ForStatement)
 }
 
 // Parse a `for`/`in` and `for`/`of` loop, which are almost
 // same from parser's perspective.
-
+/**
+ * 解析for-in for-of循环
+ * @param {Node} node 
+ * @param {Node} init 
+ * @returns 
+ */
 pp.parseForIn = function(node, init) {
   const isForIn = this.type === tt._in
   this.next()
 
+  // for (let i = 1 of bbb)
   if (
     init.type === "VariableDeclaration" &&
     init.declarations[0].init != null &&
@@ -504,11 +603,17 @@ pp.parseForIn = function(node, init) {
   node.body = this.parseStatement("for")
   this.exitScope()
   this.labels.pop()
-  return this.finishNode(node, isForIn ? "ForInStatement" : "ForOfStatement")
+  return this.finishNode(node, isForIn ? NodeTypes.ForInStatement : NodeTypes.ForOfStatement)
 }
 
 // Parse a list of variable declarations.
-
+/**
+ * 解析变量定义, 设置到declarations中, 返回Node
+ * @param {Node} node 
+ * @param {boolean} isFor 
+ * @param {string} kind 'let','var','const'
+ * @returns {Node}
+ */
 pp.parseVar = function(node, isFor, kind) {
   node.declarations = []
   node.kind = kind
@@ -518,29 +623,44 @@ pp.parseVar = function(node, isFor, kind) {
     if (this.eat(tt.eq)) {
       decl.init = this.parseMaybeAssign(isFor)
     } else if (kind === "const" && !(this.type === tt._in || (this.options.ecmaVersion >= 6 && this.isContextual("of")))) {
+      // const aaa += 这种形式报错
       this.unexpected()
     } else if (decl.id.type !== "Identifier" && !(isFor && (this.type === tt._in || this.isContextual("of")))) {
       this.raise(this.lastTokEnd, "Complex binding patterns require an initialization value")
     } else {
       decl.init = null
     }
-    node.declarations.push(this.finishNode(decl, "VariableDeclarator"))
+    node.declarations.push(this.finishNode(decl, NodeTypes.VariableDeclarator))
     if (!this.eat(tt.comma)) break
   }
   return node
 }
 
+/**
+ * 读出变量名, 设置到decl.id上
+ * @param {Node} decl 
+ * @param {string} kind 
+ */
 pp.parseVarId = function(decl, kind) {
   decl.id = this.parseBindingAtom()
   this.checkLValPattern(decl.id, kind === "var" ? BIND_VAR : BIND_LEXICAL, false)
 }
 
-const FUNC_STATEMENT = 1, FUNC_HANGING_STATEMENT = 2, FUNC_NULLABLE_ID = 4
+const FUNC_STATEMENT = 1, FUNC_HANGING_STATEMENT /* context为if或者label */ = 2, FUNC_NULLABLE_ID = 4
 
 // Parse a function declaration or literal (depending on the
 // `statement & FUNC_STATEMENT`).
 
 // Remove `allowExpressionBody` for 7.0.0, as it is only called with false
+/**
+ * 
+ * @param {Node} node 
+ * @param {number} statement 当前所在的statement, 在parseExprAtom中进入的时候为0
+ * @param {boolean} allowExpressionBody 
+ * @param {boolean} isAsync 
+ * @param {*} forInit 
+ * @returns 
+ */
 pp.parseFunction = function(node, statement, allowExpressionBody, isAsync, forInit) {
   this.initFunction(node)
   if (this.options.ecmaVersion >= 9 || this.options.ecmaVersion >= 6 && !isAsync) {
@@ -576,9 +696,13 @@ pp.parseFunction = function(node, statement, allowExpressionBody, isAsync, forIn
   this.yieldPos = oldYieldPos
   this.awaitPos = oldAwaitPos
   this.awaitIdentPos = oldAwaitIdentPos
-  return this.finishNode(node, (statement & FUNC_STATEMENT) ? "FunctionDeclaration" : "FunctionExpression")
+  return this.finishNode(node, (statement & FUNC_STATEMENT) ? NodeTypes.FunctionDeclaration : NodeTypes.FunctionExpression)
 }
 
+/**
+ * 调用parseBindingList读出函数的入参, 并设置到node.params上
+ * @param {*} node 
+ */
 pp.parseFunctionParams = function(node) {
   this.expect(tt.parenL)
   node.params = this.parseBindingList(tt.parenR, false, this.options.ecmaVersion >= 8)
@@ -587,7 +711,12 @@ pp.parseFunctionParams = function(node) {
 
 // Parse a class declaration or literal (depending on the
 // `isStatement` parameter).
-
+/**
+ * 解析class声明
+ * @param {Node} node 
+ * @param {boolean} isStatement 
+ * @returns 
+ */
 pp.parseClass = function(node, isStatement) {
   this.next()
 
@@ -617,11 +746,16 @@ pp.parseClass = function(node, isStatement) {
   }
   this.strict = oldStrict
   this.next()
-  node.body = this.finishNode(classBody, "ClassBody")
+  node.body = this.finishNode(classBody, NodeTypes.ClassBody)
   this.exitClassBody()
-  return this.finishNode(node, isStatement ? "ClassDeclaration" : "ClassExpression")
+  return this.finishNode(node, isStatement ? NodeTypes.ClassDeclaration : NodeTypes.ClassExpression)
 }
 
+/**
+ * 解析class中的成员.
+ * @param {*} constructorAllowsSuper 
+ * @returns 
+ */
 pp.parseClassElement = function(constructorAllowsSuper) {
   if (this.eat(tt.semi)) return null
 
@@ -635,6 +769,7 @@ pp.parseClassElement = function(constructorAllowsSuper) {
 
   if (this.eatContextual("static")) {
     // Parse static init block
+    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Static_initialization_blocks
     if (ecmaVersion >= 13 && this.eat(tt.braceL)) {
       this.parseClassStaticBlock(node)
       return node
@@ -674,7 +809,7 @@ pp.parseClassElement = function(constructorAllowsSuper) {
     node.computed = false
     node.key = this.startNodeAt(this.lastTokStart, this.lastTokStartLoc)
     node.key.name = keyName
-    this.finishNode(node.key, "Identifier")
+    this.finishNode(node.key, NodeTypes.Identifier)
   } else {
     this.parseClassElementName(node)
   }
@@ -694,6 +829,10 @@ pp.parseClassElement = function(constructorAllowsSuper) {
   return node
 }
 
+/**
+ * 判断是否合法的class的成员
+ * @returns {boolean}
+ */
 pp.isClassElementNameStart = function() {
   return (
     this.type === tt.name ||
@@ -705,7 +844,11 @@ pp.isClassElementNameStart = function() {
   )
 }
 
-pp.parseClassElementName = function(element) {
+/**
+ * 解析class成员的名字
+ * @param {*} element 
+ */
+pp.parseClassElementName = function (element) {
   if (this.type === tt.privateId) {
     if (this.value === "constructor") {
       this.raise(this.start, "Classes can't have an element named '#constructor'")
@@ -717,6 +860,14 @@ pp.parseClassElementName = function(element) {
   }
 }
 
+/**
+ * 解析class成员函数
+ * @param {Node} method 
+ * @param {*} isGenerator 
+ * @param {*} isAsync 
+ * @param {*} allowsDirectSuper 
+ * @returns 
+ */
 pp.parseClassMethod = function(method, isGenerator, isAsync, allowsDirectSuper) {
   // Check key and flags
   const key = method.key
@@ -738,9 +889,14 @@ pp.parseClassMethod = function(method, isGenerator, isAsync, allowsDirectSuper) 
   if (method.kind === "set" && value.params[0].type === "RestElement")
     this.raiseRecoverable(value.params[0].start, "Setter cannot use rest params")
 
-  return this.finishNode(method, "MethodDefinition")
+  return this.finishNode(method, NodeTypes.MethodDefinition)
 }
 
+/**
+ * 解析class成员变量定义
+ * @param {Node} field 
+ * @returns 
+ */
 pp.parseClassField = function(field) {
   if (checkKeyName(field, "constructor")) {
     this.raise(field.key.start, "Classes can't have a field named 'constructor'")
@@ -760,9 +916,16 @@ pp.parseClassField = function(field) {
   }
   this.semicolon()
 
-  return this.finishNode(field, "PropertyDefinition")
+  return this.finishNode(field, NodeTypes.PropertyDefinition)
 }
 
+/**
+ * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Static_initialization_blocks
+ * class 内部
+ * static {} 这种语法
+ * @param {*} node 
+ * @returns 
+ */
 pp.parseClassStaticBlock = function(node) {
   node.body = []
 
@@ -777,31 +940,50 @@ pp.parseClassStaticBlock = function(node) {
   this.exitScope()
   this.labels = oldLabels
 
-  return this.finishNode(node, "StaticBlock")
+  return this.finishNode(node, NodeTypes.StaticBlock)
 }
 
+/**
+ * 解析class name
+ * @param {*} node 
+ * @param {boolean} isStatement 
+ */
 pp.parseClassId = function(node, isStatement) {
   if (this.type === tt.name) {
+    // class xxx { constructor(){} }
     node.id = this.parseIdent()
     if (isStatement)
       this.checkLValSimple(node.id, BIND_LEXICAL, false)
   } else {
     if (isStatement === true)
       this.unexpected()
+    // let c = class { constructor(){} }
     node.id = null
   }
 }
 
+/**
+ * 解析extends
+ * @param {*} node 
+ */
 pp.parseClassSuper = function(node) {
   node.superClass = this.eat(tt._extends) ? this.parseExprSubscripts(false) : null
 }
 
+/**
+ * 进入class时调用, 生成一个私有变量的保存对象, 并插入到栈上.
+ * @returns 
+ */
 pp.enterClassBody = function() {
   const element = {declared: Object.create(null), used: []}
   this.privateNameStack.push(element)
   return element.declared
 }
 
+/**
+ * 退出class时调用
+ * 弹出前面的变量保存对象, 从used中循环, 如果当前成员组不存在, 则插入到父对象上的used中. 如果没有父对象, 则报错.
+ */
 pp.exitClassBody = function() {
   const {declared, used} = this.privateNameStack.pop()
   const len = this.privateNameStack.length
@@ -853,7 +1035,12 @@ function checkKeyName(node, name) {
 }
 
 // Parses module export declaration.
-
+/**
+ * 解析export导出函数
+ * @param {Node} node 
+ * @param {Record<string, unknown>} exports 
+ * @returns 
+ */
 pp.parseExport = function(node, exports) {
   this.next()
   // export * from '...'
@@ -870,7 +1057,7 @@ pp.parseExport = function(node, exports) {
     if (this.type !== tt.string) this.unexpected()
     node.source = this.parseExprAtom()
     this.semicolon()
-    return this.finishNode(node, "ExportAllDeclaration")
+    return this.finishNode(node, NodeTypes.ExportAllDeclaration)
   }
   if (this.eat(tt._default)) { // export default ...
     this.checkExport(exports, "default", this.lastTokStart)
@@ -887,7 +1074,7 @@ pp.parseExport = function(node, exports) {
       node.declaration = this.parseMaybeAssign()
       this.semicolon()
     }
-    return this.finishNode(node, "ExportDefaultDeclaration")
+    return this.finishNode(node, NodeTypes.ExportDefaultDeclaration)
   }
   // export var|const|let|function|class ...
   if (this.shouldParseExportStatement()) {
@@ -920,9 +1107,16 @@ pp.parseExport = function(node, exports) {
     }
     this.semicolon()
   }
-  return this.finishNode(node, "ExportNamedDeclaration")
+  return this.finishNode(node, NodeTypes.ExportNamedDeclaration)
 }
 
+/**
+ * 检查exports是否重复了.
+ * @param {Record<string, unknown>} exports 
+ * @param {string | Node} name 
+ * @param {Position} pos 
+ * @returns 
+ */
 pp.checkExport = function(exports, name, pos) {
   if (!exports) return
   if (typeof name !== "string")
@@ -932,6 +1126,11 @@ pp.checkExport = function(exports, name, pos) {
   exports[name] = true
 }
 
+/**
+ * 只在checkVariableExport调用, 递归调用到所有子节点
+ * @param {Record<string, unknown>} exports 
+ * @param {Node} pat 
+ */
 pp.checkPatternExport = function(exports, pat) {
   let type = pat.type
   if (type === "Identifier")
@@ -953,12 +1152,22 @@ pp.checkPatternExport = function(exports, pat) {
     this.checkPatternExport(exports, pat.expression)
 }
 
+/**
+ * 循环判断列表中的node是否都已经导出
+ * @param {*} exports 
+ * @param {*} decls 
+ * @returns 
+ */
 pp.checkVariableExport = function(exports, decls) {
   if (!exports) return
   for (let decl of decls)
     this.checkPatternExport(exports, decl.id)
 }
 
+/**
+ * var|const|let|function|class
+ * @returns 
+ */
 pp.shouldParseExportStatement = function() {
   return this.type.keyword === "var" ||
     this.type.keyword === "const" ||
@@ -969,7 +1178,11 @@ pp.shouldParseExportStatement = function() {
 }
 
 // Parses a comma-separated list of module exports.
-
+/**
+ * 读出待导出的变量
+ * @param {Record<string, unknown>} exports 
+ * @returns 
+ */
 pp.parseExportSpecifiers = function(exports) {
   let nodes = [], first = true
   // export { x, y as z } [from '...']
@@ -988,13 +1201,17 @@ pp.parseExportSpecifiers = function(exports) {
       node.exported,
       node.exported.start
     )
-    nodes.push(this.finishNode(node, "ExportSpecifier"))
+    nodes.push(this.finishNode(node, NodeTypes.ExportSpecifier))
   }
   return nodes
 }
 
 // Parses import declaration.
-
+/**
+ * 
+ * @param {Node} node 
+ * @returns 
+ */
 pp.parseImport = function(node) {
   this.next()
   // import '...'
@@ -1007,7 +1224,7 @@ pp.parseImport = function(node) {
     node.source = this.type === tt.string ? this.parseExprAtom() : this.unexpected()
   }
   this.semicolon()
-  return this.finishNode(node, "ImportDeclaration")
+  return this.finishNode(node, NodeTypes.ImportDeclaration)
 }
 
 // Parses a comma-separated list of module imports.
@@ -1019,7 +1236,7 @@ pp.parseImportSpecifiers = function() {
     let node = this.startNode()
     node.local = this.parseIdent()
     this.checkLValSimple(node.local, BIND_LEXICAL)
-    nodes.push(this.finishNode(node, "ImportDefaultSpecifier"))
+    nodes.push(this.finishNode(node, NodeTypes.ImportDefaultSpecifier))
     if (!this.eat(tt.comma)) return nodes
   }
   if (this.type === tt.star) {
@@ -1028,7 +1245,7 @@ pp.parseImportSpecifiers = function() {
     this.expectContextual("as")
     node.local = this.parseIdent()
     this.checkLValSimple(node.local, BIND_LEXICAL)
-    nodes.push(this.finishNode(node, "ImportNamespaceSpecifier"))
+    nodes.push(this.finishNode(node, NodeTypes.ImportNamespaceSpecifier))
     return nodes
   }
   this.expect(tt.braceL)
@@ -1047,11 +1264,15 @@ pp.parseImportSpecifiers = function() {
       node.local = node.imported
     }
     this.checkLValSimple(node.local, BIND_LEXICAL)
-    nodes.push(this.finishNode(node, "ImportSpecifier"))
+    nodes.push(this.finishNode(node, NodeTypes.ImportSpecifier))
   }
   return nodes
 }
 
+/**
+ * 尝试解析export的变量名
+ * @returns {Node}
+ */
 pp.parseModuleExportName = function() {
   if (this.options.ecmaVersion >= 13 && this.type === tt.string) {
     const stringLiteral = this.parseLiteral(this.value)
@@ -1069,6 +1290,8 @@ pp.adaptDirectivePrologue = function(statements) {
     statements[i].directive = statements[i].expression.raw.slice(1, -1)
   }
 }
+
+/** */
 pp.isDirectiveCandidate = function(statement) {
   return (
     this.options.ecmaVersion >= 5 &&

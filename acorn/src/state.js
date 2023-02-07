@@ -2,7 +2,8 @@ import {reservedWords, keywords} from "./identifier.js"
 import {types as tt} from "./tokentype.js"
 import {lineBreak} from "./whitespace.js"
 import {getOptions} from "./options.js"
-import {wordsRegexp} from "./util.js"
+import { wordsRegexp } from "./util.js"
+import { Position } from './locutil.js';
 import {SCOPE_TOP, SCOPE_FUNCTION, SCOPE_ASYNC, SCOPE_GENERATOR, SCOPE_SUPER, SCOPE_DIRECT_SUPER, SCOPE_CLASS_STATIC_BLOCK} from "./scopeflags.js"
 
 export class Parser {
@@ -105,6 +106,7 @@ export class Parser {
     // The stack of private names.
     // Each element has two properties: 'declared' and 'used'.
     // When it exited from the outermost class definition, all used private names must be declared.
+    // 私有变量使用的栈
     this.privateNameStack = []
   }
 

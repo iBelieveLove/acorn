@@ -40,7 +40,7 @@ export class TokenType {
     this.isAssign = !!conf.isAssign
     this.prefix = !!conf.prefix
     this.postfix = !!conf.postfix
-    /** @type {boolean | null} */
+    /** @type {number | null} */
     this.binop = conf.binop || null // boolean | null
     /** @type {() => void | null} */
     this.updateContext = null
@@ -69,7 +69,9 @@ export const types = {
   num: new TokenType("num", startsExpr),
   regexp: new TokenType("regexp", startsExpr),
   string: new TokenType("string", startsExpr),
+  // 正常的变量, 以及部分的关键词也会使用name
   name: new TokenType("name", startsExpr),
+  // #开头表示的变量
   privateId: new TokenType("privateId", startsExpr),
   eof: new TokenType("eof"), // 标识结束符
 
@@ -162,4 +164,69 @@ export const types = {
   _typeof: kw("typeof", {beforeExpr: true, prefix: true, startsExpr: true}),
   _void: kw("void", {beforeExpr: true, prefix: true, startsExpr: true}),
   _delete: kw("delete", {beforeExpr: true, prefix: true, startsExpr: true})
+}
+
+export const NodeTypes = {
+  Program: 'Program',
+  EmptyStatement: 'EmptyStatement',
+  Identifier: 'Identifier',
+  VariableDeclaration: 'VariableDeclaration',
+  BreakStatement: 'BreakStatement',
+  ContinueStatement: 'ContinueStatement',
+  DebuggerStatement: 'DebuggerStatement',
+  DoWhileStatement: 'DoWhileStatement',
+  IfStatement: 'IfStatement',
+  ReturnStatement: 'ReturnStatement',
+  SwitchCase: 'SwitchCase',
+  SwitchStatement: 'SwitchStatement',
+  ThrowStatement: 'ThrowStatement',
+  CatchClause: 'CatchClause',
+  TryStatement: 'TryStatement',
+  WhileStatement: 'WhileStatement',
+  WithStatement: 'WithStatement',
+  LabeledStatement: 'LabeledStatement',
+  ExpressionStatement: 'ExpressionStatement',
+  BlockStatement: 'BlockStatement',
+  ForStatement: 'ForStatement',
+  ForInStatement: 'ForInStatement',
+  ForOfStatement: 'ForOfStatement',
+  VariableDeclarator: 'VariableDeclarator',
+  FunctionDeclaration: 'FunctionDeclaration',
+  FunctionExpression: 'FunctionExpression',
+  ClassBody: 'ClassBody',
+  ClassDeclaration: 'ClassDeclaration',
+  ClassExpression: 'ClassExpression',
+  MethodDefinition: 'MethodDefinition',
+  PropertyDefinition: 'PropertyDefinition',
+  StaticBlock: 'StaticBlock',
+  ExportAllDeclaration: 'ExportAllDeclaration',
+  ExportDefaultDeclaration: 'ExportDefaultDeclaration',
+  ExportNamedDeclaration: 'ExportNamedDeclaration',
+  ExportSpecifier: 'ExportSpecifier',
+  ImportDeclaration: 'ImportDeclaration',
+  ImportDefaultSpecifier: 'ImportDefaultSpecifier',
+  ImportNamespaceSpecifier: 'ImportNamespaceSpecifier',
+  ImportSpecifier: 'ImportSpecifier',
+  SpreadElement: 'SpreadElement', // ...解构, 如let a = [...c]
+  RestElement: 'RestElement', // ...解构赋值, 如 let [...aaa] = bbb;
+  ArrayPattern: 'ArrayPattern', // 解析出的单个语句, 如let [a,b]
+  AssignmentPattern: 'AssignmentPattern', // 类似let [a, b = 2] = c 中的b=2
+  ChainExpression: 'ChainExpression', // 可选链表达式
+  ArrowFunctionExpression: 'ArrowFunctionExpression', // 箭头函数
+  MemberExpression: 'MemberExpression', // 成员表达式
+  CallExpression: 'CallExpression', // 调用表达式, 如fn()
+  TaggedTemplateExpression: 'TaggedTemplateExpression',
+  AssignmentExpression: 'AssignmentExpression', // +=, -= 等
+  ConditionalExpression: 'ConditionalExpression', // ? : 三元表达式
+  AwaitExpression: 'AwaitExpression', // await 类型表达式
+  YieldExpression: 'YieldExpression', // yield表达式
+  ObjectPattern: 'ObjectPattern', // object变量定义式, 如let {a, b = 2} = { a: 3, b: 4} 
+  ObjectExpression: 'ObjectExpression', // object定义, 如 obj = { c: 3, d: 4}
+  UpdateExpression: 'UpdateExpression', // ++/-- 这种自增自减表达式, 在前面时
+  UnaryExpression: 'UnaryExpression', // ++/-- 这种自增自减表达式, 在后面时, 或者typeof, delete这种表达式, 或者+/-这种表达正负
+  Literal: 'Literal', // null, true, false, 数字, 字符串等
+  ArrayExpression: 'ArrayExpression',
+  SequenceExpression: 'SequenceExpression', // (a,b,c)
+  MetaProperty: 'MetaProperty',
+  NewExpression: 'NewExpression',
 }
